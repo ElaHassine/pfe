@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Lesio Doctor Portal",
+    "slug": "lesio-doctor",
+    "version": "1.0.0",
+    "platforms": ["web"],
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "splash": { "backgroundColor": "#050E1F" }
+  }
+}
