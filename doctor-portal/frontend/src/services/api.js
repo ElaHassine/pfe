@@ -54,8 +54,16 @@ export const doctorPortalApi = {
   getDashboard: () => request('/api/doctor/dashboard'),
   listCases: () => request('/api/doctor/cases'),
   getCaseById: (id) => request(`/api/doctor/cases/${id}`),
+  submitScanReview: (scanId, payload) => request(`/api/doctor/cases/${scanId}/review`, {
+    method: 'POST',
+    body: payload,
+  }),
   listPatients: () => request('/api/doctor/patients'),
   getPatientHistory: (patientId) => request(`/api/doctor/patients/${patientId}/history`),
+  listBlogs: () => request('/api/doctor/blogs'),
+  createBlog: (payload) => request('/api/doctor/blogs', { method: 'POST', body: payload }),
+  updateBlog: (blogId, payload) => request(`/api/doctor/blogs/${blogId}`, { method: 'PATCH', body: payload }),
+  deleteBlog: (blogId) => request(`/api/doctor/blogs/${blogId}`, { method: 'DELETE' }),
   getNotifications: () => request('/api/doctor/notifications'),
   listReviews: () => request('/api/doctor/reviews'),
   heartbeatPresence: () => request('/api/doctor/presence/heartbeat', { method: 'POST' }),
@@ -80,6 +88,19 @@ export const doctorPortalApi = {
     method: 'PATCH',
     body: payload,
   }),
+  listBlogs: () => request('/api/doctor/blogs'),
+};
+
+export const blogApi = {
+  listBlogs: () => request('/api/blogs'),
+  getBlog: (blogId) => request(`/api/blogs/${blogId}`),
+};
+
+export const catalogApi = {
+  listDoctors: () => request('/api/catalog/doctors'),
+  getDoctorDetails: (doctorId) => request(`/api/catalog/doctors/${doctorId}`),
+  listArticles: () => request('/api/catalog/articles'),
+  getRiskHistory: () => request('/api/catalog/risk-history'),
 };
 
 export const doctorAuthApi = {

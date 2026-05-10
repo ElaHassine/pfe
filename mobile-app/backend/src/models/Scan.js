@@ -19,6 +19,7 @@ const ScanSchema = new mongoose.Schema(
     doctorNotes: { type: String, default: '' },
     clinicalDiagnosis: { type: String, default: '' },
     recommendation: { type: String, default: '' },
+    features: { type: [Number], default: [], sparse: true },
   },
   { timestamps: true }
 );

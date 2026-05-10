@@ -8,6 +8,8 @@ const CommunityPost = require('../models/CommunityPost');
 const BookingRequest = require('../models/BookingRequest');
 const ChatThread = require('../models/ChatThread');
 const DoctorAppointment = require('../models/DoctorAppointment');
+const ActivityEvent = require('../models/ActivityEvent');
+const { recordPatientActivity } = require('../services/activityService');
 
 function calculateAge(dob) {
   if (!dob) {

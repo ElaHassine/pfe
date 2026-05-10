@@ -16,12 +16,14 @@ const {
 	heartbeatPresence,
 	setOfflinePresence,
 } = require('../controllers/doctorController');
+const { submitScanReview } = require('../controllers/scanReviewController');
 
 router.use(protectDoctor);
 
 router.get('/dashboard', getDashboard);
 router.get('/cases', listCases);
 router.get('/cases/:id', getCaseById);
+router.post('/cases/:scanId/review', submitScanReview);
 router.get('/patients', listPatients);
 router.get('/patients/:id/history', getPatientHistory);
 router.get('/community/posts', listCommunityPosts);

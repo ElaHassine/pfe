@@ -213,6 +213,7 @@ export const scanApi = {
     method: 'PATCH',
     body: { patientNotes },
   }),
+  getPreviousFeatures: (trackingGroupId) => request(`/api/scans/group/${trackingGroupId}/previous-features`),
 };
 
 export const communityApi = {
@@ -253,6 +254,11 @@ export const communityApi = {
   unlikeComment: (postId, commentId) => request(`/api/community/posts/${postId}/comments/${commentId}/like`, { method: 'DELETE' }),
   likePost: (postId) => request(`/api/community/posts/${postId}/like`, { method: 'POST' }),
   unlikePost: (postId) => request(`/api/community/posts/${postId}/like`, { method: 'DELETE' }),
+};
+
+export const blogApi = {
+  listBlogs: () => request('/api/blogs'),
+  getBlog: (blogId) => request(`/api/blogs/${blogId}`),
 };
 
 export const catalogApi = {

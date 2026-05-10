@@ -16,6 +16,7 @@ import AnalyticsScreen  from './screens/AnalyticsScreen';
 import ReviewsScreen    from './screens/ReviewsScreen';
 import SettingsScreen   from './screens/SettingsScreen';
 import PatientHistoryScreen from './screens/PatientHistoryScreen';
+import BlogsScreen      from './screens/BlogsScreen';
 import LoginScreen      from './screens/LoginScreen';
 import { doctorAuthApi, doctorPortalApi, clearAuthToken, setAuthToken } from './services/api';
 
@@ -28,6 +29,7 @@ const NAV = [
   { id: 'messages',  icon: 'message-circle', label: 'Chat' },
   { id: 'analytics', icon: 'bar-chart-2',label: 'Analytics'  },
   { id: 'reviews',   icon: 'star',       label: 'Reviews'    },
+  { id: 'blogs',     icon: 'book-open',  label: 'Blogs'      },
   { id: 'settings',  icon: 'settings',   label: 'Settings'   },
 ];
 
@@ -214,6 +216,7 @@ export default function DoctorApp() {
       case 'messages':  return <ChatScreen navigate={navigate} />;
       case 'analytics': return <AnalyticsScreen />;
       case 'reviews':   return <ReviewsScreen />;
+      case 'blogs':     return <BlogsScreen doctor={doctor} />;
       case 'settings':  return <SettingsScreen doctor={doctor} onDoctorUpdated={setDoctor} />;
       case 'patient-history': return <PatientHistoryScreen navigate={navigate} historyContext={historyContext} />;
       default:          return <PlaceholderScreen title={activeScreen} />;

@@ -15,11 +15,13 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Type, Space, Radius, Shadow, HIT, riskConfig } from '../theme';
 import { Button, RiskBadge, ScanCard, DoctorCard, DoctorAvatar, StatCard, SectionHeader, EmptyState, AILoadingOverlay } from '../components';
-import { scanApi, catalogApi, analysisApi, communityApi, chatApi, bookingApi, patientApi } from '../services/api';
+import { scanApi, catalogApi, analysisApi as catalogAnalysisApi, communityApi, chatApi, bookingApi, patientApi, blogApi } from '../services/api';
+import { analyzeImageWithDrift } from '../services/analysisApi';
 import { useAuth } from '../context/AuthContext';
 import DoctorMapView from '../components/DoctorMapView';
 
 const { width } = Dimensions.get('window');
+const TRACKING_FEATURE_DIMENSION = 1792;
 
 function getDoctorCoordinate(doctor) {
   const direct = doctor?.coordinate || doctor?.coordinates || doctor?.locationCoordinates;
@@ -163,6 +165,40 @@ export function LesionScanScreen({ navigation, route }) {
     || ''
   ).trim();
 
+  const resolvePreviousTrackingFeatures = async () => {
+    const sourceScanFeatures = route?.params?.sourceScan?.analysis?.features;
+    if (Array.isArray(sourceScanFeatures) && sourceScanFeatures.length === TRACKING_FEATURE_DIMENSION) {
+      return sourceScanFeatures;
+    }
+
+    if (!sourceTrackingGroupId) return null;
+
+    // First, try to fetch from the backend
+    try {
+      const response = await scanApi.getPreviousFeatures(sourceTrackingGroupId);
+      if (Array.isArray(response?.features) && response.features.length === TRACKING_FEATURE_DIMENSION) {
+        return response.features;
+      }
+    } catch (error) {
+      console.warn('Failed to fetch previous features from backend:', error?.message || error);
+    }
+
+    // Fallback: try to find features from local scan list
+    const response = await scanApi.list();
+    const trackedScans = (response?.scans || [])
+      .filter((scan) => String(scan?.trackingGroupId || '').trim() === sourceTrackingGroupId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    for (const trackedScan of trackedScans) {
+      const features = trackedScan?.analysis?.features || trackedScan?.features;
+      if (Array.isArray(features) && features.length === TRACKING_FEATURE_DIMENSION) {
+        return features;
+      }
+    }
+
+    return null;
+  };
+
   useEffect(() => {
     // Prompt once when entering capture flow to reduce first-capture failures.
     if (step === 'capture' && cameraPermission && !cameraPermission.granted) {
@@ -219,7 +255,7 @@ export function LesionScanScreen({ navigation, route }) {
     setStep('gradcam-loading');
 
     try {
-      const result = await analysisApi.analyzeWithGradCAM(imageUri);
+      const result = await catalogAnalysisApi.analyzeWithGradCAM(imageUri);
 
       if (result?.noLesionDetected || result?.code === 'NO_LESION_DETECTED') {
         Alert.alert('No lesion detected', 'No lesion detected, try again.');
@@ -329,7 +365,38 @@ export function LesionScanScreen({ navigation, route }) {
     });
 
     try {
-      const result = gradcamResult;
+      let result = gradcamResult;
+      let previousTrackingFeatures = null;
+
+      if (sourceTrackingGroupId) {
+        try {
+          previousTrackingFeatures = await resolvePreviousTrackingFeatures();
+        } catch (trackingError) {
+          console.warn('Longitudinal tracking lookup failed:', trackingError?.message || trackingError);
+        }
+      }
+
+      if (previousTrackingFeatures) {
+        try {
+          const longitudinalResult = await analyzeImageWithDrift(capturedImageUri, previousTrackingFeatures);
+          result = {
+            ...gradcamResult,
+            drift: longitudinalResult?.drift ?? null,
+            drift_label: longitudinalResult?.drift_label ?? null,
+            longitudinal: {
+              applied: true,
+              trackingGroupId: sourceTrackingGroupId || null,
+              previousFeaturesCount: previousTrackingFeatures.length,
+              drift: longitudinalResult?.drift ?? null,
+              driftLabel: longitudinalResult?.drift_label ?? null,
+              riskScore: longitudinalResult?.risk_score ?? null,
+            },
+          };
+        } catch (trackingError) {
+          console.warn('Longitudinal tracking analysis failed:', trackingError?.message || trackingError);
+        }
+      }
+
       let createdScan = null;
 
       try {
@@ -340,6 +407,7 @@ export function LesionScanScreen({ navigation, route }) {
           lesionType: result?.lesionType || 'Unclassified Lesion',
           riskLevel: String(result?.riskLevel || 'low').toLowerCase(),
           confidence: Number(result?.confidence || 0),
+          features: Array.isArray(result?.features) && result.features.length === 1792 ? result.features : [],
           analysis: result,
         });
 
@@ -355,6 +423,7 @@ export function LesionScanScreen({ navigation, route }) {
             confidence: persisted.confidence,
             lesionType: persisted.lesionType,
             analysis: persisted.analysis,
+            features: persisted.features || [],
             notes: persisted.notes || '',
             doctorNotes: persisted.doctorNotes || '',
           };
@@ -659,7 +728,33 @@ const sc = StyleSheet.create({
 
 export function AIResultScreen({ navigation, route }) {
   const MOCK = { riskLevel:'medium', confidence:83, lesionType:'Dysplastic Nevus', characteristics:['Asymmetric border','Color variation','Diameter ~6mm','Flat surface'], recommendation:'consult', abcde:{ A:{label:'Asymmetry',value:'Moderate',flag:true}, B:{label:'Border',value:'Irregular edges',flag:true}, C:{label:'Color',value:'2-3 shades',flag:true}, D:{label:'Diameter',value:'~6mm',flag:false}, E:{label:'Evolution',value:'Track needed',flag:false} } };
-  const scan = route.params?.scan;
+  const [fetchedScan, setFetchedScan] = useState(null);
+  const [isLoadingScan, setIsLoadingScan] = useState(false);
+  const passedScan = route.params?.scan;
+  const scan = fetchedScan || passedScan;
+
+  // Fetch full scan if only ID was provided
+  useEffect(() => {
+    const fetchFullScan = async () => {
+      if (!passedScan) return;
+      // If we already have scan data (not just an ID), don't refetch
+      if (passedScan.riskLevel) return;
+      
+      setIsLoadingScan(true);
+      try {
+        const result = await scanApi.getScanById(passedScan.id);
+        if (result?.scan) {
+          setFetchedScan(result.scan);
+        }
+      } catch (_error) {
+        // Fall through if fetch fails
+      } finally {
+        setIsLoadingScan(false);
+      }
+    };
+    fetchFullScan();
+  }, [passedScan?.id, passedScan?.riskLevel]);
+
   const scanAnalysis = scan?.analysis || null;
 
   const fallbackRecommendation = (riskLevel) => {
@@ -695,6 +790,7 @@ export function AIResultScreen({ navigation, route }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.92)).current;
   const barAnim = useRef(new Animated.Value(0)).current;
+  const [shareOptionsVisible, setShareOptionsVisible] = useState(false);
   const [shareModalVisible, setShareModalVisible] = useState(false);
   const [shareDoctors, setShareDoctors] = useState([]);
   const [isLoadingDoctors, setIsLoadingDoctors] = useState(false);
@@ -857,7 +953,7 @@ export function AIResultScreen({ navigation, route }) {
         onBack={() => navigation.reset({ index: 0, routes: [{ name: 'PatientDashboard' }] })}
         rightIcon="share-2"
         rightLabel="Share diagnosis"
-        onRight={openShareToDoctor}
+        onRight={() => setShareOptionsVisible(true)}
       />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Space.s20, paddingBottom: Space.s48 }}>
@@ -1001,39 +1097,17 @@ export function AIResultScreen({ navigation, route }) {
 
           {/* Actions */}
           <View style={{ gap: Space.s12, marginTop: Space.s8 }}>
-            <Button label="Share With Doctor" onPress={openShareToDoctor} icon="send" iconPos="left" />
-            <Button
-              label={isSharingToCommunity ? 'Sharing...' : 'Share To Community'}
-              onPress={shareResultToCommunity}
-              icon="users"
-              iconPos="left"
-              loading={isSharingToCommunity}
-            />
             <Button label="Find Dermatologist" onPress={() => navigation.navigate('DermatologistFinder')} icon="map-pin" />
-            <View style={{ flexDirection:'row', gap: Space.s12 }}>
-              <Button
-                label="Track Lesion"
-                onPress={() => navigation.navigate('LesionTracking', {
-                  trackingGroupId,
-                  scan,
-                })}
-                variant="outline"
-                icon="bar-chart-2"
-                iconPos="left"
-                style={{ flex:1 }}
-              />
-              <Button
-                label="New Scan"
-                onPress={() => navigation.navigate('LesionScan', {
-                  trackingGroupId,
-                  sourceScan: scan,
-                })}
-                variant="outline"
-                icon="camera"
-                iconPos="left"
-                style={{ flex:1 }}
-              />
-            </View>
+            <Button
+              label="Track Lesion"
+              onPress={() => navigation.navigate('LesionTracking', {
+                trackingGroupId,
+                scan,
+              })}
+              variant="outline"
+              icon="bar-chart-2"
+              iconPos="left"
+            />
           </View>
 
           {/* Disclaimer */}
@@ -1091,6 +1165,42 @@ export function AIResultScreen({ navigation, route }) {
                 loading={isSavingPatientNotes}
                 disabled={!scan?.id || isSavingPatientNotes}
                 size="sm"
+              />
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={shareOptionsVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShareOptionsVisible(false)}
+      >
+        <Pressable style={ar.modalBackdrop} onPress={() => setShareOptionsVisible(false)}>
+          <Pressable style={[ar.modalCard, Shadow.lg]} onPress={() => {}}>
+            <Text style={ar.modalTitle}>Share Diagnosis</Text>
+            <Text style={ar.modalSub}>Choose how you want to share this analysis.</Text>
+
+            <View style={{ gap: Space.s12 }}>
+              <Button
+                label="Share With Doctor"
+                onPress={() => {
+                  setShareOptionsVisible(false);
+                  openShareToDoctor();
+                }}
+                icon="send"
+                iconPos="left"
+              />
+              <Button
+                label={isSharingToCommunity ? 'Sharing...' : 'Share To Community'}
+                onPress={() => {
+                  setShareOptionsVisible(false);
+                  shareResultToCommunity();
+                }}
+                icon="users"
+                iconPos="left"
+                loading={isSharingToCommunity}
               />
             </View>
           </Pressable>
@@ -1516,7 +1626,13 @@ export function LesionTrackingScreen({ navigation, route }) {
   return (
     <View style={{ flex: 1, backgroundColor: Colors.grey50 }}>
       <StatusBar barStyle="light-content" />
-      <ScreenHeader title="Lesion Tracking" onBack={() => navigation.goBack()} rightIcon="plus" rightLabel="Add scan" />
+      <ScreenHeader
+        title="Lesion Tracking"
+        onBack={() => navigation.goBack()}
+        rightIcon="plus"
+        rightLabel="Add scan"
+        onRight={() => navigation.navigate('LesionScan', { trackingGroupId: activeTrackingGroupId })}
+      />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Space.s20, paddingBottom: Space.s48 }}>
 
@@ -3201,18 +3317,41 @@ const ch = StyleSheet.create({
 // SKIN EDUCATION SCREEN
 // ═════════════════════════════════════════════════════════════════════════════
 
+// Category colors - consistent with doctor portal
+const CATEGORY_COLORS = {
+  'Detection': '#00C2B2',
+  'Education': '#6366F1',
+  'Prevention': '#F59E0B',
+  'Reference': '#00C48C',
+  'Treatment': '#45B7D1',
+  'Dermatology': '#EC4899',
+  'Screening': '#8B5CF6',
+  'Skincare': '#06B6D4',
+  'Wellness': '#10B981',
+  'Case Studies': '#F97316',
+};
+
 export function SkinEducationScreen({ navigation }) {
   const [expanded, setExpanded] = useState(null);
   const [catFilter, setCat] = useState('All');
   const [articlesList, setArticlesList] = useState([]);
+  const [doctorBlogs, setDoctorBlogs] = useState([]);
   const [search, setSearch] = useState('');
 
   useEffect(() => {
     let mounted = true;
-    catalogApi.listArticles().then(({ articles }) => {
-      if (mounted) setArticlesList(articles || []);
+    Promise.all([
+      catalogApi.listArticles(),
+      blogApi.listBlogs(),
+    ]).then(([articlesResponse, blogsResponse]) => {
+      if (!mounted) return;
+      setArticlesList(articlesResponse.articles || []);
+      setDoctorBlogs((blogsResponse.blogs || []).map(mapDoctorBlogToArticle));
     }).catch(() => {
-      if (mounted) setArticlesList([]);
+      if (mounted) {
+        setArticlesList([]);
+        setDoctorBlogs([]);
+      }
     });
     return () => { mounted = false; };
   }, []);
@@ -3225,16 +3364,28 @@ export function SkinEducationScreen({ navigation }) {
     { letter:'E', title:'Evolution',  desc:'Any change in size, shape, or color over time.',                               flag:true  },
   ];
 
-  const cats = ['All', ...new Set(articlesList.map(a => a.category))];
+  const formatBlogDate = (article = {}) => {
+    const rawDate = article.publishedAt || article.updatedAt || article.createdAt;
+    if (!rawDate) return '';
+    const date = new Date(rawDate);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString(undefined, { month: 'short', day: '2-digit', year: 'numeric' });
+  };
+
+  const cats = ['All', ...new Set([...articlesList, ...doctorBlogs].map(a => a.category))];
   const categoryColors = {
     All: Colors.primary,
+    ...CATEGORY_COLORS,
     ...Object.fromEntries(
-      articlesList
+      [...articlesList, ...doctorBlogs]
         .filter((item) => item?.category)
-        .map((item) => [item.category, item.color || Colors.primary])
+        .map((item) => [item.category, item.color || CATEGORY_COLORS[item.category] || Colors.primary])
     ),
   };
   const articles = (catFilter === 'All' ? articlesList : articlesList.filter(a => a.category === catFilter)).filter((article) =>
+    [article.title, article.summary, article.category].some((value) => String(value || '').toLowerCase().includes(search.toLowerCase()))
+  );
+  const doctorArticles = (catFilter === 'All' ? doctorBlogs : doctorBlogs.filter(a => a.category === catFilter)).filter((article) =>
     [article.title, article.summary, article.category].some((value) => String(value || '').toLowerCase().includes(search.toLowerCase()))
   );
 
@@ -3316,11 +3467,11 @@ export function SkinEducationScreen({ navigation }) {
           })}
         </ScrollView>
 
-        {/* Blogs */}
+        {/* Doctor-written blogs */}
         <View style={{ paddingHorizontal: Space.s20 }}>
-          <SectionHeader title="Educational Blogs" />
-          {articles.map(article => (
-            <TouchableOpacity key={article.id} style={se.articleCard} onPress={() => setExpanded(expanded===article.id ? null : article.id)} activeOpacity={0.82} accessibilityLabel={article.title} accessibilityRole="button" accessibilityState={{ expanded: expanded===article.id }}>
+          <SectionHeader title="Doctor Blogs" />
+          {doctorArticles.map(article => (
+            <TouchableOpacity key={article.id} style={se.articleCard} onPress={() => navigation.navigate('ArticleDetail', { article })} activeOpacity={0.82} accessibilityLabel={article.title} accessibilityRole="button">
               <View style={{ width:4, backgroundColor: article.color, borderTopLeftRadius:4, borderBottomLeftRadius:4 }} />
               <View style={{ flex:1, padding: Space.s16 }}>
                 <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom: Space.s8 }}>
@@ -3328,29 +3479,45 @@ export function SkinEducationScreen({ navigation }) {
                     <View style={{ backgroundColor: article.color+'20', paddingHorizontal:8, paddingVertical:3, borderRadius: Radius.full }}>
                       <Text style={{ ...Type.l3, color: article.color }}>{article.category}</Text>
                     </View>
-                    <Text style={{ ...Type.l3, color: Colors.textMuted }}>⏱ {article.readTime}</Text>
                   </View>
-                  <Feather name={expanded===article.id ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.textMuted} />
                 </View>
                 <Text style={se.articleTitle}>{article.title}</Text>
                 <Text style={se.articleSummary}>{article.summary}</Text>
-                {expanded === article.id && (
-                  <View style={{ marginTop: Space.s16, paddingTop: Space.s16, borderTopWidth:1, borderTopColor: Colors.grey50 }}>
-                    <Text style={{ ...Type.b2, color: Colors.grey700, lineHeight:24 }}>
-                      This blog provides in-depth information about {article.title.toLowerCase()}. Understanding this topic is essential for early detection and prevention of skin conditions.{"\n\n"}
-                      Regular self-examination combined with annual dermatologist visits remains the most effective strategy for maintaining skin health and catching potential issues early.
-                    </Text>
-                    <TouchableOpacity
-                      style={{ marginTop: Space.s12, flexDirection:'row', alignItems:'center', gap: Space.s4 }}
-                      accessibilityLabel="Read full blog"
-                      accessibilityRole="link"
-                      onPress={() => navigation.navigate('ArticleDetail', { article })}
-                    >
-                      <Text style={{ ...Type.l2, color: article.color }}>Read Full Blog</Text>
-                      <Feather name="arrow-right" size={13} color={article.color} />
-                    </TouchableOpacity>
+                {article.authorName ? <Text style={{ ...Type.l3, color: Colors.grey700, marginTop: Space.s8 }}>By {article.authorName}</Text> : null}
+                <Text style={{ ...Type.l3, color: Colors.textMuted, marginTop: Space.s4 }}>
+                  {article.readTime || '1 min read'}{formatBlogDate(article) ? ` · ${formatBlogDate(article)}` : ''}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+
+          {doctorArticles.length === 0 ? (
+            <View style={se.emptySearchCard}>
+              <Text style={se.emptySearchTitle}>No doctor blogs yet</Text>
+              <Text style={se.emptySearchText}>Published blogs from doctors will appear here.</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Blogs */}
+        <View style={{ paddingHorizontal: Space.s20 }}>
+          <SectionHeader title="Educational Blogs" />
+          {articles.map(article => (
+            <TouchableOpacity key={article.id} style={se.articleCard} onPress={() => navigation.navigate('ArticleDetail', { article })} activeOpacity={0.82} accessibilityLabel={article.title} accessibilityRole="button">
+              <View style={{ width:4, backgroundColor: article.color, borderTopLeftRadius:4, borderBottomLeftRadius:4 }} />
+              <View style={{ flex:1, padding: Space.s16 }}>
+                <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom: Space.s8 }}>
+                  <View style={{ flexDirection:'row', gap: Space.s8, alignItems:'center' }}>
+                    <View style={{ backgroundColor: article.color+'20', paddingHorizontal:8, paddingVertical:3, borderRadius: Radius.full }}>
+                      <Text style={{ ...Type.l3, color: article.color }}>{article.category}</Text>
+                    </View>
                   </View>
-                )}
+                </View>
+                <Text style={se.articleTitle}>{article.title}</Text>
+                <Text style={se.articleSummary}>{article.summary}</Text>
+                <Text style={{ ...Type.l3, color: Colors.textMuted, marginTop: Space.s8 }}>
+                  {article.readTime || '1 min read'} · {formatBlogDate(article)}
+                </Text>
               </View>
             </TouchableOpacity>
           ))}
@@ -3378,6 +3545,25 @@ export function SkinEducationScreen({ navigation }) {
       </ScrollView>
     </View>
   );
+}
+
+function mapDoctorBlogToArticle(blog = {}) {
+  const color = blog.color || CATEGORY_COLORS[blog.category] || '#00C2B2';
+  const content = String(blog.content || '').trim();
+
+  return {
+    id: blog.id,
+    title: blog.title || 'Doctor Blog',
+    summary: blog.summary || 'Read the full blog to learn more.',
+    authorName: blog.authorSnapshot?.name || 'Doctor',
+    content,
+    category: blog.category || 'Detection',
+    color,
+    readTime: blog.readTime || '1 min read',
+    publishedAt: blog.publishedAt || null,
+    updatedAt: blog.updatedAt || null,
+    createdAt: blog.createdAt || null,
+  };
 }
 
 const se = StyleSheet.create({
@@ -3410,16 +3596,9 @@ export function ArticleDetailScreen({ navigation, route }) {
   const article = route?.params?.article || {
     title: 'Skin Health Essentials',
     category: 'Prevention',
-    readTime: '5 min',
     summary: 'Daily practices to reduce skin-risk factors and improve early detection.',
     color: Colors.primary,
-    keyTakeaways: [
-      'Inspect your skin once a month in bright light and compare any changes with prior photos.',
-      'Use broad-spectrum SPF 30+ daily, including cloudy days and short outdoor activities.',
-      'Track asymmetry, border, color, diameter, and evolution using the ABCDE framework.',
-      'Book a dermatologist consultation for lesions that evolve or remain irritated for more than two weeks.',
-    ],
-    preventionPlan:
+    content:
       'Wear protective clothing, avoid peak UV hours (10am to 4pm), and reapply sunscreen every two hours. Document suspicious lesions with date-stamped photos to support early clinical review.',
   };
 
@@ -3439,17 +3618,7 @@ export function ArticleDetailScreen({ navigation, route }) {
     ? [`rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.14)`, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.06)`]
     : ['#ECFFFC', '#E2F8F5'];
 
-  const keyTakeaways = Array.isArray(article.keyTakeaways) && article.keyTakeaways.length
-    ? article.keyTakeaways
-    : [
-        'Inspect your skin once a month in bright light and compare any changes with prior photos.',
-        'Use broad-spectrum SPF 30+ daily, including cloudy days and short outdoor activities.',
-        'Track asymmetry, border, color, diameter, and evolution using the ABCDE framework.',
-        'Book a dermatologist consultation for lesions that evolve or remain irritated for more than two weeks.',
-      ];
-
-  const preventionPlan = String(article.preventionPlan || '').trim()
-    || 'Wear protective clothing, avoid peak UV hours (10am to 4pm), and reapply sunscreen every two hours. Document suspicious lesions with date-stamped photos to support early clinical review.';
+  const fullContent = String(article.content || '').trim() || 'No content available for this blog yet.';
 
   return (
     <View style={{ flex: 1, backgroundColor: Colors.grey50 }}>
@@ -3467,21 +3636,12 @@ export function ArticleDetailScreen({ navigation, route }) {
             <Text style={[ad.categoryTxt, { color: articleColor }]}>{article.category || 'Blog'}</Text>
           </View>
           <Text style={ad.title}>{article.title}</Text>
-          <Text style={ad.meta}>Estimated read: {article.readTime || '5 min'}</Text>
           <Text style={ad.summary}>{article.summary}</Text>
         </LinearGradient>
 
         <View style={[ad.bodyCard, Shadow.sm]}>
-          <Text style={ad.sectionTitle}>Key Takeaways</Text>
-          {keyTakeaways.map((item, idx) => (
-            <View key={idx} style={ad.bulletRow}>
-              <View style={[ad.bulletDot, { backgroundColor: articleColor }]} />
-              <Text style={ad.bodyText}>{item}</Text>
-            </View>
-          ))}
-
-          <Text style={[ad.sectionTitle, { marginTop: Space.s16 }]}>Prevention Plan</Text>
-          <Text style={ad.bodyText}>{preventionPlan}</Text>
+          <Text style={ad.sectionTitle}>Content</Text>
+          <Text style={ad.bodyText}>{fullContent}</Text>
         </View>
       </ScrollView>
     </View>
@@ -3493,12 +3653,9 @@ const ad = StyleSheet.create({
   categoryPill: { alignSelf: 'flex-start', borderRadius: Radius.full, paddingHorizontal: Space.s10, paddingVertical: Space.s4, marginBottom: Space.s10 },
   categoryTxt: { ...Type.l3 },
   title: { ...Type.d3, color: Colors.textOnLight, marginBottom: Space.s8 },
-  meta: { ...Type.l2, color: Colors.textMuted, marginBottom: Space.s10 },
   summary: { ...Type.b2, color: Colors.grey700, lineHeight: 21 },
   bodyCard: { backgroundColor: Colors.bgCard, borderRadius: Radius.xl, padding: Space.s20 },
   sectionTitle: { ...Type.l1, color: Colors.textOnLight, marginBottom: Space.s10 },
-  bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Space.s8, marginBottom: Space.s10 },
-  bulletDot: { width: 8, height: 8, borderRadius: 4, marginTop: 6 },
   bodyText: { ...Type.b2, color: Colors.grey700, lineHeight: 22, flex: 1 },
 });
 

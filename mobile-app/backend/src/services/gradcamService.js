@@ -133,6 +133,29 @@ async function computeGradCAM(imageBuffer) {
     if (lowContrast) qualityIssues.push('Image contrast is too low');
     if (lowDetail) qualityIssues.push('Image has too little detail');
 
+    const severityScore = Math.max(0, Math.min(1, (
+      (asymmetryScore * 0.45)
+      + (edgeDensity * 0.35)
+      + (colorVariance * 0.20)
+    )));
+
+    const riskLevel = severityScore >= 0.5 ? 'high' : severityScore >= 0.24 ? 'medium' : 'low';
+
+    let lesionType = 'Benign Lesion';
+    if (riskLevel === 'medium') {
+      lesionType = asymmetryScore > 0.14 || colorVariance > 0.045 ? 'Atypical Nevus' : 'Monitored Lesion';
+    } else if (riskLevel === 'high') {
+      lesionType = asymmetryScore > 0.2 || edgeDensity > 0.04 ? 'Suspicious Lesion' : 'Atypical Nevus';
+    }
+
+    const confidence = Math.round(
+      Math.max(52, Math.min(94, (
+        58
+        + (qualityOk ? 8 : -12)
+        + (1 - Math.abs(severityScore - 0.5)) * 18
+      )))
+    );
+
     // Convert heatmap to PNG for transmission
     const heatmapBuffer = await sharp(
       Buffer.from(heatmapData),
@@ -146,9 +169,9 @@ async function computeGradCAM(imageBuffer) {
     return {
       heatmap: heatmapBuffer,
       heatmapShape: [224, 224],
-      confidence: 0.82,
-      riskLevel: 'medium',
-      lesionType: 'Dysplastic Nevus',
+      confidence: confidence / 100,
+      riskLevel,
+      lesionType,
       quality: {
         valid: qualityOk,
         brightness: Number(brightnessMean.toFixed(3)),

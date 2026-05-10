@@ -14,6 +14,7 @@ import { Colors, Type, Space, Radius, HIT } from '../theme';
 import { Button } from '../components';
 import AppTextInput from '../components/AppTextInput';
 import { useAuth } from '../context/AuthContext';
+import { authApi } from '../services/api';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 

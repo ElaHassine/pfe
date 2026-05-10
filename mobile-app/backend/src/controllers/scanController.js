@@ -19,6 +19,7 @@ exports.createScan = asyncHandler(async (req, res) => {
     riskLevel,
     confidence,
     analysis,
+    features = [],
     notes = '',
   } = req.body;
 
@@ -39,6 +40,7 @@ exports.createScan = asyncHandler(async (req, res) => {
     riskLevel,
     confidence,
     analysis,
+    features: Array.isArray(features) && features.length === 1792 ? features : [],
     notes,
   });
 
@@ -80,3 +82,26 @@ exports.updatePatientNotes = asyncHandler(async (req, res) => {
     patientNotes: scan.notes || '',
   });
 });
+
+exports.getPreviousFeatures = asyncHandler(async (req, res) => {
+  const { trackingGroupId } = req.params;
+
+  // Get the most recent scan with features in this tracking group
+  const previousScan = await Scan.findOne(
+    {
+      patientId: req.user._id,
+      trackingGroupId,
+      features: { $exists: true, $ne: [] },
+    },
+    { features: 1 }
+  )
+    .sort({ createdAt: -1 })
+    .lean();
+
+  if (!previousScan || !previousScan.features || previousScan.features.length === 0) {
+    return res.json({ features: null, message: 'No previous features found' });
+  }
+
+  res.json({ features: previousScan.features });
+});
+

@@ -399,7 +399,9 @@ exports.analyzeWithGradCAM = asyncHandler(async (req, res) => {
   const resolvedRiskLevel = modelPrediction?.riskLevel || result.riskLevel;
   const resolvedConfidence = modelPrediction?.confidence
     ? Math.round(Number(modelPrediction.confidence) * 100)
-    : result.confidence;
+    : Math.round(Number(result.confidence || 0) <= 1
+      ? Number(result.confidence || 0) * 100
+      : Number(result.confidence || 0));
   const secondClass = modelPrediction?.secondClass || null;
   const margin = Number(modelPrediction?.margin || 0);
   const isUncertain = !!modelPrediction && (resolvedConfidence < 60 || margin < 0.12);

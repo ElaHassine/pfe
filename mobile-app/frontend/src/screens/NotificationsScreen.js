@@ -43,11 +43,14 @@ function formatRelativeTime(value) {
 function buildNotificationMeta(event) {
   const type = String(event?.type || '').toLowerCase();
   const metadata = event?.metadata || {};
+  const entityId = event?.entityId || event?.id;
 
   if (type === 'scan.created') {
     const riskLevel = String(metadata.riskLevel || '').trim();
     const lesionType = String(metadata.lesionType || 'new scan').trim();
     return {
+      entityType: 'scan',
+      entityId,
       title: 'Scan analyzed',
       message: `${lesionType}${riskLevel ? ` • ${riskLevel} risk` : ''}`,
       icon: 'activity',
@@ -100,10 +103,22 @@ function buildNotificationMeta(event) {
   if (type === 'community.post-liked') {
     return {
       title: 'Post liked',
-      message: 'Another patient liked your post',
+      message: metadata.count ? `${metadata.count} people liked your post` : 'Someone liked your post',
       icon: 'heart',
       accent: Colors.riskHigh,
       bg: Colors.riskHighBg,
+    };
+  }
+
+  if (type === 'scan.review_received') {
+    return {
+      entityType: 'scan',
+      entityId,
+      title: 'Doctor reviewed your scan',
+      message: `${metadata.doctorName || 'A doctor'} provided feedback${metadata.diagnosis ? ` • ${metadata.diagnosis}` : ''}`,
+      icon: 'check-circle',
+      accent: Colors.primary,
+      bg: Colors.primaryDim,
     };
   }
 
@@ -358,7 +373,15 @@ export default function NotificationsScreen({ navigation }) {
                 }
               }}
             >
-              <View style={[s.card, Shadow.sm]}>
+              <TouchableOpacity
+                style={[s.card, Shadow.sm]}
+                onPress={() => {
+                  if (item.entityType === 'scan' && item.entityId) {
+                    navigation.navigate('AIResult', { scan: { id: item.entityId } });
+                  }
+                }}
+                activeOpacity={0.75}
+              >
                 <View style={[s.iconWrap, { backgroundColor: item.bg }]}>
                   <Feather name={item.icon} size={18} color={item.accent} />
                 </View>
@@ -369,7 +392,7 @@ export default function NotificationsScreen({ navigation }) {
                   </View>
                   <Text style={s.cardMessage}>{item.message}</Text>
                 </View>
-              </View>
+              </TouchableOpacity>
             </Swipeable>
           ))}
         </View>

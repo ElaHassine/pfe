@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { riskCfg } from '../services/data';
+import { doctorPortalApi } from '../services/api';
 
 const Card = ({ children, style }) => (
   <View style={[{
@@ -70,11 +71,27 @@ export default function CaseDetailScreen({ caseData: c, navigate }) {
   ];
 
   const handleSubmit = async () => {
-    if (!diagnosis.trim()) { setErrors({ diagnosis: 'Clinical diagnosis is required' }); return; }
+    if (!diagnosis.trim()) { 
+      setErrors({ diagnosis: 'Clinical diagnosis is required' }); 
+      return; 
+    }
+
     setSubmitting(true);
-    await new Promise(r => setTimeout(r, 1200));
-    setSubmitting(false);
-    setSubmitted(true);
+    try {
+      const response = await doctorPortalApi.submitScanReview(c.id, {
+        clinicalDiagnosis: diagnosis,
+        recommendation: rec,
+        doctorNotes: notes,
+      });
+
+      if (response?.message) {
+        setSubmitting(false);
+        setSubmitted(true);
+      }
+    } catch (error) {
+      setSubmitting(false);
+      Alert.alert('Error', error?.message || 'Failed to submit diagnosis');
+    }
   };
 
   if (submitted) {
