@@ -27,6 +27,7 @@ import {
   CommunityScreen,
   CommunityGuidelinesScreen,
 } from '../screens/PatientScreens';
+import AgentChatScreen from '../screens/AgentChatScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -67,6 +68,7 @@ const SkinEducationScreenSafe = withSafeArea(SkinEducationScreen);
 const ArticleDetailScreenSafe = withSafeArea(ArticleDetailScreen);
 const CommunityScreenSafe = withSafeArea(CommunityScreen);
 const CommunityGuidelinesScreenSafe = withSafeArea(CommunityGuidelinesScreen);
+const AgentChatScreenSafe = withSafeArea(AgentChatScreen);
 
 export default function AppNavigator({ initialRouteName = 'Landing' }) {
   return (
@@ -102,6 +104,7 @@ export default function AppNavigator({ initialRouteName = 'Landing' }) {
         <Stack.Screen name="AllReviews"          component={AllReviewsScreenSafe} />
         <Stack.Screen name="DermatologistMap"    component={DermatologistMapScreenSafe} />
         <Stack.Screen name="Chat"                component={ChatScreenSafe} />
+        <Stack.Screen name="AgentChat"           component={AgentChatScreenSafe} />
         <Stack.Screen name="SkinEducation"       component={SkinEducationScreenSafe} />
         <Stack.Screen name="ArticleDetail"       component={ArticleDetailScreenSafe} />
         <Stack.Screen name="Community"           component={CommunityScreenSafe} />

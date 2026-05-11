@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Feather } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Type, Space, Radius, Shadow, HIT, riskConfig } from '../theme';
 import { StatCard, ScanCard, SectionHeader, Button, EmptyState } from '../components';
@@ -665,6 +665,19 @@ export default function PatientDashboard({ navigation }) {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Floating AI Bubble */}
+      <TouchableOpacity
+        style={s.floatingAgentBubble}
+        onPress={() => navigation.navigate('AgentChat')}
+        accessibilityRole="button"
+        accessibilityLabel="Ask AI assistant"
+        activeOpacity={0.85}
+      >
+        <LinearGradient colors={['#050E1F', '#0D2147']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.floatingAgentGradient}>
+          <Ionicons name="sparkles" size={24} color="#fff" />
+        </LinearGradient>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -825,6 +838,9 @@ const s = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: Colors.bgCard,
   },
+
+  floatingAgentBubble: { position: 'absolute', bottom: 100, right: 20, width: 56, height: 56, borderRadius: 28, overflow: 'hidden', elevation: 6, shadowColor: '#0D2147', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 12, zIndex: 999 },
+  floatingAgentGradient: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
   menuBackdrop: {
     flex: 1,
