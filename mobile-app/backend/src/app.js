@@ -17,7 +17,6 @@ const doctorBlogRoutes = require('./routes/doctorBlogRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const agentRoutes = require('./routes/agent');
-const speechRoutes = require('./routes/speechRoutes');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 
 const app = express();
@@ -71,7 +70,6 @@ app.use('/api/doctor/chat', doctorChatRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/agent', agentRoutes);
-app.use('/api/speech', speechRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

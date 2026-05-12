@@ -12,12 +12,9 @@ export default function AgentChatScreen() {
   const navigation = useNavigation();
   const {
     chatMessages,
-    isListening,
     isThinking,
     error,
     sendMessage,
-    startVoice,
-    stopVoice,
     threads,
     activeThreadId,
     createNewThread,
@@ -91,14 +88,6 @@ export default function AgentChatScreen() {
       )}
 
       <View style={styles.composer}>
-        <TouchableOpacity
-          onPress={isListening ? stopVoice : startVoice}
-          style={[styles.voiceButton, isListening && styles.voiceButtonActive]}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={20} color="#fff" />
-        </TouchableOpacity>
-
         <TextInput
           placeholder="Ask about your scans..."
           placeholderTextColor="#999"
@@ -212,8 +201,6 @@ const styles = StyleSheet.create({
   errorContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#FEE', marginHorizontal: 16, borderRadius: 8, marginBottom: 4, borderLeftWidth: 3, borderLeftColor: '#C53030' },
   errorText: { color: '#C53030', fontSize: 13, flex: 1, fontWeight: '500' },
   composer: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 12, paddingVertical: 12, borderTopWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#fff', gap: 8 },
-  voiceButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#0D2147', alignItems: 'center', justifyContent: 'center', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2 },
-  voiceButtonActive: { backgroundColor: '#E74C3C' },
   input: { flex: 1, minHeight: 44, maxHeight: 100, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#F3F4F6', borderRadius: 22, fontSize: 15, color: '#1F2937', borderWidth: 1.5, borderColor: '#E5E7EB' },
   sendButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#0D2147', alignItems: 'center', justifyContent: 'center', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2 },
   sendButtonDisabled: { backgroundColor: '#E5E7EB' },

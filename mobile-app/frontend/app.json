@@ -44,8 +44,7 @@
         {
           "photosPermission": "Allow Lesio to access your photos."
         }
-      ],
-      "expo-speech-recognition"
+      ]
     ]
   }
 }

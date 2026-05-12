@@ -1,6 +1,44 @@
 const sharp = require('sharp');
 
 /**
+ * Apply red-hot colormap to intensity values with enhanced contrast
+ * Maps grayscale (0-255) to RGB:
+ * 0 (dark) -> dark red, 128 (mid) -> orange, 255 (bright) -> bright red/yellow
+ */
+function applyRedHotColormap(intensityValue) {
+  const normalized = Math.pow(intensityValue / 255, 0.6); // Apply gamma correction for better visibility
+  let r, g, b;
+
+  if (normalized < 0.25) {
+    // 0 to 0.25: dark red to red
+    const t = normalized / 0.25;
+    r = 139 + t * 116; // 139 (dark red) to 255 (red)
+    g = 0;
+    b = 0;
+  } else if (normalized < 0.5) {
+    // 0.25 to 0.5: red to orange
+    const t = (normalized - 0.25) / 0.25;
+    r = 255;
+    g = t * 165; // 0 to 165 (orange-ish)
+    b = 0;
+  } else if (normalized < 0.75) {
+    // 0.5 to 0.75: orange to yellow
+    const t = (normalized - 0.5) / 0.25;
+    r = 255;
+    g = 165 + t * 90; // 165 to 255
+    b = 0;
+  } else {
+    // 0.75 to 1: yellow to white
+    const t = (normalized - 0.75) / 0.25;
+    r = 255;
+    g = 255;
+    b = t * 255; // 0 to 255
+  }
+
+  return { r: Math.min(255, Math.max(0, Math.round(r))), g: Math.min(255, Math.max(0, Math.round(g))), b: Math.min(255, Math.max(0, Math.round(b))) };
+}
+
+/**
  * Compute Grad-CAM-style heatmap for a skin lesion image
  * Uses image processing (no ML required) to generate activation map
  * Returns a heatmap showing high activation near image center (lesion focus)
@@ -9,22 +47,22 @@ async function computeGradCAM(imageBuffer) {
   try {
     // Grayscale pass for heatmap and sharpness/detail metrics.
     const resized = await sharp(imageBuffer)
-      .resize(224, 224, { fit: 'cover', position: 'center' })
+      .resize(380, 380, { fit: 'cover', position: 'center' })
       .greyscale()
       .raw()
       .toBuffer({ resolveWithObject: true });
 
     // RGB pass for color variation metrics.
     const rgbResized = await sharp(imageBuffer)
-      .resize(224, 224, { fit: 'cover', position: 'center' })
+      .resize(380, 380, { fit: 'cover', position: 'center' })
       .removeAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });
 
     const pixels = resized.data;
     const rgbPixels = rgbResized.data;
-    const width = 224;
-    const height = 224;
+    const width = 380;
+    const height = 380;
     const channels = resized.info.channels || 1;
     const rgbChannels = rgbResized.info.channels || 3;
 
@@ -156,11 +194,19 @@ async function computeGradCAM(imageBuffer) {
       )))
     );
 
-    // Convert heatmap to PNG for transmission
+    // Apply red-hot colormap and convert to RGB PNG for transmission
+    const coloredHeatmapData = Buffer.alloc(heatmapData.length * 3);
+    for (let i = 0; i < heatmapData.length; i++) {
+      const { r, g, b } = applyRedHotColormap(heatmapData[i]);
+      coloredHeatmapData[i * 3] = r;
+      coloredHeatmapData[i * 3 + 1] = g;
+      coloredHeatmapData[i * 3 + 2] = b;
+    }
+
     const heatmapBuffer = await sharp(
-      Buffer.from(heatmapData),
+      coloredHeatmapData,
       {
-        raw: { width: 224, height: 224, channels: 1 }
+        raw: { width: 380, height: 380, channels: 3 }
       }
     )
       .png()
@@ -168,7 +214,7 @@ async function computeGradCAM(imageBuffer) {
 
     return {
       heatmap: heatmapBuffer,
-      heatmapShape: [224, 224],
+      heatmapShape: [380, 380],
       confidence: confidence / 100,
       riskLevel,
       lesionType,
@@ -196,11 +242,11 @@ async function computeGradCAM(imageBuffer) {
  */
 async function generateFallbackHeatmap() {
   const heatmapData = [];
-  const centerX = 112;
-  const centerY = 112;
+  const centerX = 190;
+  const centerY = 190;
 
-  for (let y = 0; y < 224; y++) {
-    for (let x = 0; x < 224; x++) {
+  for (let y = 0; y < 380; y++) {
+    for (let x = 0; x < 380; x++) {
       const dx = x - centerX;
       const dy = y - centerY;
       const activation = 255 * Math.exp(-(dx * dx + dy * dy) / (2 * 4000));
@@ -208,10 +254,19 @@ async function generateFallbackHeatmap() {
     }
   }
 
+  // Apply red-hot colormap and convert to RGB PNG
+  const coloredHeatmapData = Buffer.alloc(heatmapData.length * 3);
+  for (let i = 0; i < heatmapData.length; i++) {
+    const { r, g, b } = applyRedHotColormap(heatmapData[i]);
+    coloredHeatmapData[i * 3] = r;
+    coloredHeatmapData[i * 3 + 1] = g;
+    coloredHeatmapData[i * 3 + 2] = b;
+  }
+
   const heatmapBuffer = await sharp(
-    Buffer.from(heatmapData),
+    coloredHeatmapData,
     {
-      raw: { width: 224, height: 224, channels: 1 }
+      raw: { width: 380, height: 380, channels: 3 }
     }
   )
     .png()
@@ -219,7 +274,7 @@ async function generateFallbackHeatmap() {
 
   return {
     heatmap: heatmapBuffer,
-    heatmapShape: [224, 224],
+    heatmapShape: [380, 380],
     confidence: 0.75,
     riskLevel: 'medium',
     lesionType: 'Unclassified Lesion',

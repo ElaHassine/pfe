@@ -1,37 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
-import { Platform } from 'react-native';
 
-// Conditionally import speech module only on native platforms
-let ExpoSpeechRecognitionModule: any = null;
-let useSpeechRecognitionEvent: any = null;
-
-// No-op event listener for platforms without native speech support
-const noOpEventListener = (_event: string, _callback: any) => {};
-
-if (Platform.OS !== 'web') {
-  try {
-    const speechModule = require('expo-speech-recognition');
-    // Support both CJS and ESM default export shapes
-    const mod = speechModule && speechModule.default ? speechModule.default : speechModule;
-    ExpoSpeechRecognitionModule = mod.ExpoSpeechRecognitionModule || mod.ExpoWebSpeechRecognition || null;
-    useSpeechRecognitionEvent = mod.useSpeechRecognitionEvent || null;
-    // Diagnostic log to help debugging when module shape is unexpected
-    try {
-      // eslint-disable-next-line no-console
-      console.log('[Agent] loaded speech module keys:', Object.keys(mod || {}));
-    } catch (_e) {}
-  } catch (_error) {
-    // Speech module not available, use no-op
-    useSpeechRecognitionEvent = noOpEventListener;
-  }
-} else {
-  // Web platform, use no-op
-  useSpeechRecognitionEvent = noOpEventListener;
-}
-
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
+const API_URL = ((globalThis as any)?.process?.env?.EXPO_PUBLIC_API_URL) || 'http://localhost:4000';
 const TOKEN_KEY = 'lesio.auth.token';
 const AGENT_THREADS_KEY = 'lesio.agent.threads';
 const AGENT_ACTIVE_THREAD_KEY = 'lesio.agent.activeThreadId';
@@ -150,15 +121,11 @@ function buildContextWindow(history: Array<Record<string, unknown>>) {
 
 type AgentHookResult = {
   chatMessages: ChatMessage[];
-  isListening: boolean;
   isThinking: boolean;
-  isSpeechSupported: boolean;
   error: string | null;
   threads: AgentThread[];
   activeThreadId: string;
   sendMessage: (text: string) => void;
-  startVoice: () => void;
-  stopVoice: () => void;
   clearChat: () => void;
   createNewThread: () => Promise<string>;
   selectThread: (threadId: string) => Promise<void>;
@@ -168,16 +135,11 @@ type AgentHookResult = {
 export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): AgentHookResult {
   const navigation = useNavigation<any>();
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [isListening, setIsListening] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
-  const [isSpeechSupported, setIsSpeechSupported] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [threads, setThreads] = useState<AgentThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState('');
 
-  const transcriptRef = useRef('');
-  const awaitingVoiceResultRef = useRef(false);
-  const listenTimeoutRef = useRef<any>(null);
   const conversationHistoryRef = useRef<Array<Record<string, unknown>>>([
     { role: 'system', content: systemPrompt },
   ]);
@@ -193,7 +155,7 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
     return history
       .filter((message) => message.role !== 'system')
       .map((message) => ({
-        role: message.role,
+        role: message.role as 'user' | 'assistant' | 'tool',
         content: String(message.content || ''),
         tool_calls: Array.isArray(message.tool_calls) ? message.tool_calls : undefined,
         tool_call_id: typeof message.tool_call_id === 'string' ? message.tool_call_id : undefined,
@@ -255,29 +217,6 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
 
   useEffect(() => {
     let mounted = true;
-
-    const detectSpeechSupport = async () => {
-      try {
-        const supported = Boolean(ExpoSpeechRecognitionModule && typeof ExpoSpeechRecognitionModule.start === 'function');
-        // Also ensure event helper exists
-        const eventsOk = typeof useSpeechRecognitionEvent === 'function';
-        if (!supported) {
-          console.warn('SpeechRecognition module not available or missing start()');
-        }
-        if (!eventsOk) {
-          console.warn('Speech recognition event helper not available');
-        }
-        if (mounted) {
-          setIsSpeechSupported(Boolean(supported && eventsOk));
-        }
-      } catch (_error) {
-        if (mounted) {
-          setIsSpeechSupported(false);
-        }
-      }
-    };
-
-    void detectSpeechSupport();
 
     const hydrateThreads = async () => {
       try {
@@ -521,211 +460,13 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
     }
   }, [appendMessage, handleToolCall, syncActiveThread, tools]);
 
-  useSpeechRecognitionEvent('result', (event) => {
-    if (!awaitingVoiceResultRef.current) return;
-
-    try {
-      console.log('[Agent] speech result event', event?.isFinal, event?.results?.[0]?.transcript);
-    } catch (_e) {}
-
-    const transcript = event?.results?.[0]?.transcript?.trim();
-    if (transcript) {
-      transcriptRef.current = transcript;
-    }
-
-    if (event?.isFinal && transcriptRef.current) {
-      const finalTranscript = transcriptRef.current;
-      transcriptRef.current = '';
-      awaitingVoiceResultRef.current = false;
-      setIsListening(false);
-      void runAgentLoop(finalTranscript);
-    }
-  });
-
-  useSpeechRecognitionEvent('error', (event) => {
-    if (!awaitingVoiceResultRef.current) return;
-
-    try {
-      console.warn('[Agent] speech error', event);
-    } catch (_e) {}
-
-    awaitingVoiceResultRef.current = false;
-    setIsListening(false);
-    setError(event?.message || 'Speech recognition failed');
-  });
-
-  useSpeechRecognitionEvent('end', () => {
-    if (!awaitingVoiceResultRef.current) return;
-
-    try {
-      console.log('[Agent] speech end');
-    } catch (_e) {}
-
-    awaitingVoiceResultRef.current = false;
-    setIsListening(false);
-  });
-
   const sendMessage = useCallback((text: string) => {
     void runAgentLoop(text);
   }, [runAgentLoop]);
 
-  const startVoice = useCallback(async () => {
-    if (!isSpeechSupported || isThinking) {
-      return;
-    }
-
-    try {
-      setError(null);
-      transcriptRef.current = '';
-      awaitingVoiceResultRef.current = true;
-      setIsListening(true);
-
-      const hasNativeSpeech = Boolean(ExpoSpeechRecognitionModule && typeof ExpoSpeechRecognitionModule.start === 'function');
-
-      if (!hasNativeSpeech) {
-        // Fallback: record audio and send to backend for transcription (works in Expo Go)
-        try {
-          const AudioModule = require('expo-av');
-          const { Audio } = AudioModule;
-
-          const permission = await Audio.requestPermissionsAsync?.();
-          const micOk = (permission && (permission.granted === true || permission.status === 'granted')) || permission === true;
-          if (!micOk) {
-            awaitingVoiceResultRef.current = false;
-            setIsListening(false);
-            setError('Microphone permission denied');
-            return;
-          }
-
-          await Audio.setAudioModeAsync?.({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-          const recording = new Audio.Recording();
-          await recording.prepareToRecordAsync?.(Audio.RECORDING_OPTIONS_PRESET_HIGH_QUALITY);
-          await recording.startAsync?.();
-
-          // store recording instance so stopVoice can access it
-          (startVoice as any)._recording = recording;
-
-          // Safety timeout to auto-stop
-          if (listenTimeoutRef.current) clearTimeout(listenTimeoutRef.current);
-          listenTimeoutRef.current = setTimeout(async () => {
-            try {
-              await recording.stopAndUnloadAsync?.();
-            } catch (_e) {}
-            const uri = recording.getURI?.();
-            if (uri) {
-              try {
-                const token = await AsyncStorage.getItem(TOKEN_KEY);
-                const form = new FormData();
-                form.append('file', { uri, name: 'voice.m4a', type: 'audio/m4a' } as any);
-                const resp = await fetch(`${API_URL}/api/speech`, {
-                  method: 'POST',
-                  body: form,
-                  headers: {
-                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                  },
-                });
-                const data = await resp.json().catch(() => null);
-                const text = data?.transcription || data?.text || data?.transcript || (data?.raw && data.raw.text) || null;
-                if (text) {
-                  awaitingVoiceResultRef.current = false;
-                  setIsListening(false);
-                  void runAgentLoop(String(text));
-                } else {
-                  awaitingVoiceResultRef.current = false;
-                  setIsListening(false);
-                  setError(data?.error || 'Could not transcribe audio');
-                }
-              } catch (uploadErr: any) {
-                awaitingVoiceResultRef.current = false;
-                setIsListening(false);
-                setError(uploadErr?.message || 'Upload failed');
-              }
-            } else {
-              awaitingVoiceResultRef.current = false;
-              setIsListening(false);
-              setError('Recording failed');
-            }
-          }, 12000);
-
-          return;
-        } catch (recErr) {
-          console.error('[Agent] recording fallback setup failed', recErr);
-          awaitingVoiceResultRef.current = false;
-          setIsListening(false);
-          setError('Speech recognition not available; install expo-av or use dev client');
-          return;
-        }
-      }
-
-      const micPerm = await ExpoSpeechRecognitionModule.requestMicrophonePermissionsAsync?.();
-      const recogPerm = await ExpoSpeechRecognitionModule.requestSpeechRecognizerPermissionsAsync?.();
-
-      const micOk = (micPerm && (micPerm.granted === true || micPerm.status === 'granted')) || micPerm === true;
-      const recogOk = (recogPerm && (recogPerm.granted === true || recogPerm.status === 'granted')) || recogPerm === true;
-
-      if (!micOk) {
-        awaitingVoiceResultRef.current = false;
-        setIsListening(false);
-        setError('Microphone permission denied');
-        return;
-      }
-
-      if (!recogOk) {
-        console.warn('Speech recognizer permission not explicitly granted, continuing');
-      }
-
-      // Safety timeout: if no final result in 12s, stop listening
-      if (listenTimeoutRef.current) {
-        clearTimeout(listenTimeoutRef.current);
-      }
-      listenTimeoutRef.current = setTimeout(() => {
-        if (awaitingVoiceResultRef.current) {
-          awaitingVoiceResultRef.current = false;
-          setIsListening(false);
-          try {
-            ExpoSpeechRecognitionModule.stop?.();
-          } catch (_e) {
-            ExpoSpeechRecognitionModule.abort?.();
-          }
-          setError('No speech detected — please try again');
-        }
-      }, 12000);
-
-      ExpoSpeechRecognitionModule.start({
-        lang: 'en-US',
-        interimResults: true,
-        continuous: false,
-        addsPunctuation: true,
-      });
-    } catch (voiceError: any) {
-      awaitingVoiceResultRef.current = false;
-      setIsListening(false);
-      console.error('[Agent] startVoice failed', voiceError);
-      setError(voiceError?.message || 'Unable to start voice input');
-    }
-  }, [isSpeechSupported, isThinking]);
-
-  const stopVoice = useCallback(() => {
-    awaitingVoiceResultRef.current = false;
-    setIsListening(false);
-
-    try {
-      if (listenTimeoutRef.current) {
-        clearTimeout(listenTimeoutRef.current);
-        listenTimeoutRef.current = null;
-      }
-      ExpoSpeechRecognitionModule?.stop?.();
-    } catch (_error) {
-      ExpoSpeechRecognitionModule?.abort?.();
-    }
-  }, []);
-
   const clearChat = useCallback(() => {
     conversationHistoryRef.current = [{ role: 'system', content: systemPrompt }];
-    transcriptRef.current = '';
-    awaitingVoiceResultRef.current = false;
     setChatMessages([]);
-    setIsListening(false);
     setIsThinking(false);
     setError(null);
   }, [systemPrompt]);
@@ -770,18 +511,14 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
 
   return useMemo(() => ({
     chatMessages,
-    isListening,
     isThinking,
-    isSpeechSupported,
     error,
     threads,
     activeThreadId,
     sendMessage,
-    startVoice,
-    stopVoice,
     clearChat,
     createNewThread,
     selectThread,
     deleteThread,
-  }), [activeThreadId, chatMessages, clearChat, createNewThread, deleteThread, error, isListening, isSpeechSupported, isThinking, selectThread, sendMessage, startVoice, stopVoice, threads]);
+  }), [activeThreadId, chatMessages, clearChat, createNewThread, deleteThread, error, isThinking, selectThread, sendMessage, threads]);
 }
