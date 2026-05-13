@@ -99,4 +99,26 @@ export const patientTools = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'send_message_to_doctor',
+      description:
+        'Send a message to a doctor by name. This will create or find an existing conversation thread with the doctor and send them your message. Use this when the user wants to message, contact, or send a message to a specific doctor.',
+      parameters: {
+        type: 'object',
+        properties: {
+          doctorName: {
+            type: 'string',
+            description: 'The name of the doctor to send the message to (e.g., "Dr. Sarra", "Sarah").',
+          },
+          message: {
+            type: 'string',
+            description: 'The message content to send to the doctor.',
+          },
+        },
+        required: ['doctorName', 'message'],
+      },
+    },
+  },
 ];

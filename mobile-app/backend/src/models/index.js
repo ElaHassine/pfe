@@ -10,4 +10,5 @@ module.exports = {
   ActivityEvent: require('./ActivityEvent'),
   ChatThread: require('./ChatThread'),
   ChatMessage: require('./ChatMessage'),
+  AgentConversation: require('./AgentConversation'),
 };

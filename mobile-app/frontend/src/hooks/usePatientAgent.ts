@@ -4,8 +4,9 @@ import { useNavigation } from '@react-navigation/native';
 
 const API_URL = ((globalThis as any)?.process?.env?.EXPO_PUBLIC_API_URL) || 'http://localhost:4000';
 const TOKEN_KEY = 'lesio.auth.token';
-const AGENT_THREADS_KEY = 'lesio.agent.threads';
-const AGENT_ACTIVE_THREAD_KEY = 'lesio.agent.activeThreadId';
+const LEGACY_AGENT_THREADS_KEY = 'lesio.agent.threads';
+const LEGACY_AGENT_ACTIVE_THREAD_KEY = 'lesio.agent.activeThreadId';
+const AGENT_CONVERSATIONS_ENDPOINT = '/api/agent/conversations';
 const MAX_AGENT_ITERATIONS = 5;
 const MAX_CONTEXT_MESSAGES = 24;
 const MAX_CONTEXT_CHARS = 24000;
@@ -31,6 +32,7 @@ type StoredAgentMessage = {
   content?: string;
   tool_calls?: Array<Record<string, unknown>>;
   tool_call_id?: string;
+  timestamp?: string;
 };
 
 type AgentThread = {
@@ -43,6 +45,34 @@ type AgentThread = {
 };
 
 type ToolCallArgs = Record<string, any>;
+
+function createDraftThreadId() {
+  return `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeStoredThread(thread: any): AgentThread | null {
+  if (!thread) return null;
+
+  const id = String(thread.id || thread.conversationId || thread._id || '').trim();
+  if (!id) return null;
+
+  return {
+    id,
+    title: String(thread.title || 'New conversation').trim() || 'New conversation',
+    createdAt: thread.createdAt || new Date().toISOString(),
+    updatedAt: thread.updatedAt || thread.lastMessageAt || new Date().toISOString(),
+    preview: String(thread.preview || 'Start a conversation').trim() || 'Start a conversation',
+    messages: Array.isArray(thread.messages)
+      ? thread.messages.map((message: any) => ({
+          role: ['user', 'assistant', 'tool'].includes(String(message?.role)) ? message.role : 'assistant',
+          content: String(message?.content || ''),
+          tool_calls: Array.isArray(message?.tool_calls) ? message.tool_calls : undefined,
+          tool_call_id: typeof message?.tool_call_id === 'string' ? message.tool_call_id : undefined,
+          timestamp: message?.timestamp || message?.createdAt || message?.updatedAt || thread.updatedAt,
+        }))
+      : [],
+  };
+}
 
 function truncateText(value: unknown, maxLen = 1200): string {
   const text = String(value || '');
@@ -139,6 +169,16 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
   const [error, setError] = useState<string | null>(null);
   const [threads, setThreads] = useState<AgentThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState('');
+  const activeThreadIdRef = useRef('');
+
+  const updateActiveThreadId = useCallback((threadId: string) => {
+    activeThreadIdRef.current = threadId;
+    setActiveThreadId(threadId);
+  }, []);
+
+  useEffect(() => {
+    activeThreadIdRef.current = activeThreadId;
+  }, [activeThreadId]);
 
   const conversationHistoryRef = useRef<Array<Record<string, unknown>>>([
     { role: 'system', content: systemPrompt },
@@ -162,40 +202,52 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
       }));
   }, []);
 
-  const persistThreads = useCallback(async (nextThreads: AgentThread[], nextActiveThreadId: string) => {
-    setThreads(nextThreads);
-    setActiveThreadId(nextActiveThreadId);
-    await AsyncStorage.multiSet([
-      [AGENT_THREADS_KEY, JSON.stringify(nextThreads)],
-      [AGENT_ACTIVE_THREAD_KEY, nextActiveThreadId],
-    ]);
-  }, []);
-
   const syncActiveThread = useCallback(async (history: Array<Record<string, unknown>>) => {
-    const now = new Date().toISOString();
+    const serializedMessages = serializeConversation(history);
+    if (serializedMessages.length === 0) {
+      return activeThreadIdRef.current || activeThreadId || '';
+    }
+
+    const currentThreadId = activeThreadIdRef.current || activeThreadId || createDraftThreadId();
+    if (!activeThreadIdRef.current) {
+      updateActiveThreadId(currentThreadId);
+    }
+
     const previewMessage = history.find((message) => message.role === 'user' && String(message.content || '').trim())
       || history.find((message) => message.role === 'assistant' && String(message.content || '').trim());
 
-    const serializedMessages = serializeConversation(history);
-    const title = makeThreadTitle(serializedMessages as StoredAgentMessage[]);
-    const preview = String(previewMessage?.content || '').trim();
-
-    const nextThread: AgentThread = {
-      id: activeThreadId || `${Date.now()}`,
-      title,
-      createdAt: threads.find((thread) => thread.id === activeThreadId)?.createdAt || now,
-      updatedAt: now,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...serializedMessages,
-      ],
-      preview: preview || 'Start a conversation',
+    const payload = {
+      conversationId: currentThreadId,
+      title: makeThreadTitle(serializedMessages as StoredAgentMessage[]),
+      preview: String(previewMessage?.content || '').trim() || 'Start a conversation',
+      messages: serializedMessages,
     };
 
-    const filtered = threads.filter((thread) => thread.id !== nextThread.id);
-    await persistThreads([nextThread, ...filtered], nextThread.id);
-    return nextThread.id;
-  }, [activeThreadId, makeThreadTitle, persistThreads, serializeConversation, systemPrompt, threads]);
+    const token = await AsyncStorage.getItem(TOKEN_KEY);
+    const response = await fetch(`${API_URL}${AGENT_CONVERSATIONS_ENDPOINT}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const responsePayload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(responsePayload?.message || responsePayload?.error || 'Failed to save agent conversation');
+    }
+
+    const savedThread = normalizeStoredThread(responsePayload?.conversation || responsePayload);
+    if (!savedThread) {
+      throw new Error('Invalid agent conversation response');
+    }
+
+    setThreads((previous) => [savedThread, ...previous.filter((thread) => thread.id !== savedThread.id)]
+      .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()));
+    updateActiveThreadId(savedThread.id);
+    return savedThread.id;
+  }, [activeThreadId, makeThreadTitle, serializeConversation, updateActiveThreadId]);
 
   const loadThreadIntoMemory = useCallback((thread?: AgentThread | null) => {
     const nextHistory = [
@@ -210,7 +262,7 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
         id: `${message.role}-${thread?.id || 'thread'}-${index}`,
         role: message.role as 'user' | 'assistant',
         text: String(message.content || ''),
-        timestamp: new Date(thread?.updatedAt || Date.now()),
+        timestamp: new Date(message.timestamp || thread?.updatedAt || Date.now()),
       })));
     setError(null);
   }, [systemPrompt]);
@@ -220,44 +272,84 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
 
     const hydrateThreads = async () => {
       try {
-        const [storedThreads, storedActiveThreadId] = await AsyncStorage.multiGet([AGENT_THREADS_KEY, AGENT_ACTIVE_THREAD_KEY]);
-        const parsedThreads = storedThreads?.[1] ? JSON.parse(storedThreads[1]) : [];
-        const normalizedThreads: AgentThread[] = Array.isArray(parsedThreads) ? parsedThreads : [];
-        const selectedThreadId = storedActiveThreadId?.[1] || normalizedThreads[0]?.id || '';
-        const selectedThread = normalizedThreads.find((thread) => thread.id === selectedThreadId) || normalizedThreads[0] || null;
+        const token = await AsyncStorage.getItem(TOKEN_KEY);
+        const legacyThreadsRaw = await AsyncStorage.getItem(LEGACY_AGENT_THREADS_KEY);
+        const importedThreads: AgentThread[] = [];
+
+        if (legacyThreadsRaw) {
+          try {
+            const parsedLegacyThreads = JSON.parse(legacyThreadsRaw);
+            const legacyThreads: AgentThread[] = Array.isArray(parsedLegacyThreads)
+              ? parsedLegacyThreads.map(normalizeStoredThread).filter(Boolean) as AgentThread[]
+              : [];
+
+            for (const legacyThread of legacyThreads) {
+              const legacyResponse = await fetch(`${API_URL}${AGENT_CONVERSATIONS_ENDPOINT}`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+                body: JSON.stringify({
+                  conversationId: legacyThread.id,
+                  title: legacyThread.title,
+                  preview: legacyThread.preview,
+                  messages: legacyThread.messages,
+                }),
+              });
+
+              const legacyPayload = await legacyResponse.json().catch(() => null);
+              if (legacyResponse.ok) {
+                const savedLegacyThread = normalizeStoredThread(legacyPayload?.conversation || legacyPayload);
+                if (savedLegacyThread) {
+                  importedThreads.push(savedLegacyThread);
+                }
+              }
+            }
+
+            await AsyncStorage.multiRemove([LEGACY_AGENT_THREADS_KEY, LEGACY_AGENT_ACTIVE_THREAD_KEY]);
+          } catch (_migrationError) {
+            // Legacy history import is best-effort; the current backend list still loads below.
+          }
+        }
+
+        const response = await fetch(`${API_URL}${AGENT_CONVERSATIONS_ENDPOINT}`, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+
+        const payload = await response.json().catch(() => null);
+        const normalizedThreads: AgentThread[] = Array.isArray(payload?.conversations)
+          ? payload.conversations.map(normalizeStoredThread).filter(Boolean) as AgentThread[]
+          : [];
+        const mergedThreads = [...importedThreads, ...normalizedThreads]
+          .filter(Boolean)
+          .reduce<AgentThread[]>((accumulator, thread) => {
+            if (accumulator.some((existing) => existing.id === thread.id)) {
+              return accumulator;
+            }
+
+            return [...accumulator, thread];
+          }, [])
+          .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
 
         if (!mounted) return;
 
-        setThreads(normalizedThreads);
-        setActiveThreadId(selectedThread?.id || '');
-        if (selectedThread) {
-          loadThreadIntoMemory(selectedThread);
-        } else {
-          const initialThreadId = `${Date.now()}`;
-          const initialThread: AgentThread = {
-            id: initialThreadId,
-            title: 'New conversation',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            messages: [{ role: 'system', content: systemPrompt }],
-            preview: 'Start a conversation',
-          };
-          setThreads([initialThread]);
-          setActiveThreadId(initialThreadId);
-          conversationHistoryRef.current = [{ role: 'system', content: systemPrompt }];
-        }
+        setThreads(mergedThreads);
+        const draftThreadId = createDraftThreadId();
+        updateActiveThreadId(draftThreadId);
+        conversationHistoryRef.current = [{ role: 'system', content: systemPrompt }];
+        setChatMessages([]);
+        setError(null);
       } catch (_error) {
         if (!mounted) return;
-        const initialThreadId = `${Date.now()}`;
-        setThreads([{
-          id: initialThreadId,
-          title: 'New conversation',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          messages: [{ role: 'system', content: systemPrompt }],
-          preview: 'Start a conversation',
-        }]);
-        setActiveThreadId(initialThreadId);
+        const draftThreadId = createDraftThreadId();
+        setThreads([]);
+        updateActiveThreadId(draftThreadId);
+        conversationHistoryRef.current = [{ role: 'system', content: systemPrompt }];
+        setChatMessages([]);
       }
     };
 
@@ -368,6 +460,36 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
         return JSON.stringify({ ok: response.ok, status: response.status, data: compact });
       }
 
+      case 'send_message_to_doctor': {
+        const doctorName = String(args?.doctorName || '').trim();
+        const message = String(args?.message || '').trim();
+
+        if (!doctorName) {
+          return JSON.stringify({ error: 'doctorName is required' });
+        }
+
+        if (!message) {
+          return JSON.stringify({ error: 'message is required' });
+        }
+
+        const response = await fetch(`${API_URL}/api/agent/send-doctor-message`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            doctorName,
+            message,
+          }),
+        });
+
+        const payload = await response.json().catch(() => null);
+        return JSON.stringify({ 
+          ok: response.ok, 
+          status: response.status, 
+          data: payload,
+          message: payload?.message || payload?.error,
+        });
+      }
+
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -381,6 +503,8 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
     appendMessage('user', trimmed);
     setIsThinking(true);
     setError(null);
+
+    await syncActiveThread(conversationHistoryRef.current).catch(() => null);
 
     try {
       for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration += 1) {
@@ -433,6 +557,8 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
               tool_call_id: toolCall.id,
               content: toolResult,
             });
+
+            await syncActiveThread(conversationHistoryRef.current).catch(() => null);
           }
 
           continue;
@@ -449,7 +575,7 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
           appendMessage('assistant', 'I could not generate a response. Please try again.');
         }
 
-        await syncActiveThread(conversationHistoryRef.current);
+        await syncActiveThread(conversationHistoryRef.current).catch(() => null);
         break;
       }
     } catch (loopError: any) {
@@ -472,42 +598,53 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
   }, [systemPrompt]);
 
   const createNewThread = useCallback(async () => {
-    const now = new Date().toISOString();
-    const newThreadId = `${Date.now()}`;
-    const newThread: AgentThread = {
-      id: newThreadId,
-      title: 'New conversation',
-      createdAt: now,
-      updatedAt: now,
-      messages: [{ role: 'system', content: systemPrompt }],
-      preview: 'Start a conversation',
-    };
-
-    await persistThreads([newThread, ...threads], newThreadId);
-    loadThreadIntoMemory(newThread);
+    const newThreadId = createDraftThreadId();
+    updateActiveThreadId(newThreadId);
+    conversationHistoryRef.current = [{ role: 'system', content: systemPrompt }];
+    setChatMessages([]);
+    setError(null);
+    setIsThinking(false);
     return newThreadId;
-  }, [loadThreadIntoMemory, persistThreads, systemPrompt, threads]);
+  }, [systemPrompt, updateActiveThreadId]);
 
   const selectThread = useCallback(async (threadId: string) => {
     const selected = threads.find((thread) => thread.id === threadId) || null;
     if (!selected) return;
-    await AsyncStorage.setItem(AGENT_ACTIVE_THREAD_KEY, threadId);
-    setActiveThreadId(threadId);
+    updateActiveThreadId(threadId);
     loadThreadIntoMemory(selected);
-  }, [loadThreadIntoMemory, threads]);
+  }, [loadThreadIntoMemory, threads, updateActiveThreadId]);
 
   const deleteThread = useCallback(async (threadId: string) => {
-    const filtered = threads.filter((thread) => thread.id !== threadId);
-    const nextActive = filtered[0]?.id || '';
-    await persistThreads(filtered, nextActive);
-    if (threadId === activeThreadId) {
-      if (filtered[0]) {
-        loadThreadIntoMemory(filtered[0]);
-      } else {
-        await createNewThread();
-      }
+    const token = await AsyncStorage.getItem(TOKEN_KEY);
+    const response = await fetch(`${API_URL}${AGENT_CONVERSATIONS_ENDPOINT}/${encodeURIComponent(threadId)}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+    if (!response.ok && response.status !== 404) {
+      const payload = await response.json().catch(() => null);
+      throw new Error(payload?.message || payload?.error || 'Failed to delete conversation');
     }
-  }, [activeThreadId, createNewThread, loadThreadIntoMemory, persistThreads, threads]);
+
+    const filtered = threads.filter((thread) => thread.id !== threadId);
+    setThreads(filtered);
+
+    if (threadId === activeThreadId) {
+      await createNewThread();
+    }
+  }, [activeThreadId, createNewThread, threads]);
+
+  useEffect(() => {
+    if (!activeThreadId || threads.some((thread) => thread.id === activeThreadId)) {
+      return;
+    }
+
+    conversationHistoryRef.current = [{ role: 'system', content: systemPrompt }];
+    setChatMessages([]);
+  }, [activeThreadId, systemPrompt, threads]);
 
   return useMemo(() => ({
     chatMessages,

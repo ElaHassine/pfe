@@ -1,9 +1,10 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, ActivityIndicator, StyleSheet, StatusBar, Modal, Pressable } from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity, ActivityIndicator, StyleSheet, StatusBar, Modal, Pressable, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, Feather } from '@expo/vector-icons';
+import { Swipeable } from 'react-native-gesture-handler';
 import { usePatientAgent } from '../hooks/usePatientAgent';
 import { PATIENT_SYSTEM_PROMPT } from '../ai/systemPrompt';
 import { patientTools } from '../ai/patientTools';
@@ -19,10 +20,34 @@ export default function AgentChatScreen() {
     activeThreadId,
     createNewThread,
     selectThread,
+    deleteThread,
   } = usePatientAgent(PATIENT_SYSTEM_PROMPT, patientTools as any);
   const [text, setText] = useState('');
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const listRef = useRef<FlatList<any> | null>(null);
+
+  const renderHistorySwipeActions = () => (
+    <View style={styles.deleteAction}>
+      <Feather name="trash-2" size={18} color="#fff" />
+    </View>
+  );
+
+  const confirmDeleteThread = (threadId: string) => {
+    Alert.alert(
+      'Delete conversation?',
+      'This will permanently remove the selected chat from your history.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void deleteThread(threadId).catch(() => null);
+          },
+        },
+      ]
+    );
+  };
 
   const handleSend = () => {
     const trimmed = String(text || '').trim();
@@ -127,8 +152,7 @@ export default function AgentChatScreen() {
             <TouchableOpacity
               style={styles.newChatButton}
               onPress={async () => {
-                const nextId = await createNewThread();
-                await selectThread(nextId);
+                await createNewThread();
                 setText('');
                 setIsHistoryOpen(false);
               }}
@@ -142,21 +166,33 @@ export default function AgentChatScreen() {
               data={threads}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[styles.historyItem, item.id === activeThreadId && styles.historyItemActive]}
-                  onPress={async () => {
-                    await selectThread(item.id);
-                    setText('');
-                    setIsHistoryOpen(false);
+                <Swipeable
+                  key={item.id}
+                  renderRightActions={renderHistorySwipeActions}
+                  rightThreshold={44}
+                  overshootRight={false}
+                  onSwipeableOpen={(direction) => {
+                    if (direction === 'right') {
+                      confirmDeleteThread(item.id);
+                    }
                   }}
-                  activeOpacity={0.8}
                 >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.historyItemTitle} numberOfLines={1}>{item.title || 'New conversation'}</Text>
-                    <Text style={styles.historyItemPreview} numberOfLines={2}>{item.preview || 'Start a conversation'}</Text>
-                  </View>
-                  <Feather name="chevron-right" size={18} color="#94A3B8" />
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.historyItem, item.id === activeThreadId && styles.historyItemActive]}
+                    onPress={async () => {
+                      await selectThread(item.id);
+                      setText('');
+                      setIsHistoryOpen(false);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.historyItemTitle} numberOfLines={1}>{item.title || 'New conversation'}</Text>
+                      <Text style={styles.historyItemPreview} numberOfLines={2}>{item.preview || 'Start a conversation'}</Text>
+                    </View>
+                    <Feather name="chevron-right" size={18} color="#94A3B8" />
+                  </TouchableOpacity>
+                </Swipeable>
               )}
               ListEmptyComponent={(
                 <View style={styles.historyEmpty}>
@@ -216,4 +252,5 @@ const styles = StyleSheet.create({
   historyItemPreview: { fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 18 },
   historyEmpty: { paddingVertical: 24, alignItems: 'center' },
   historyEmptyText: { color: '#64748B' },
+  deleteAction: { width: 96, flex: 1, borderRadius: 14, backgroundColor: '#E11D48', alignItems: 'center', justifyContent: 'center', marginLeft: 8, marginRight: 2 },
 });
