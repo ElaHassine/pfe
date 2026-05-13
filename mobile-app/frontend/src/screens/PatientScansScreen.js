@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -58,6 +58,10 @@ export default function PatientScansScreen({ navigation, route }) {
   const [riskFilter, setRiskFilter] = useState(route?.params?.riskFilter || 'All');
   const [scans, setScans] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    setRiskFilter(route?.params?.riskFilter || 'All');
+  }, [route?.params?.riskFilter]);
 
   const loadScans = useCallback(async (mountedRef) => {
     setIsLoading(true);
@@ -272,7 +276,7 @@ const ps = StyleSheet.create({
   summaryCardActiveLow: { borderWidth: 1.5, borderColor: Colors.riskLow + '66' },
   summaryCardActiveMedium: { borderWidth: 1.5, borderColor: Colors.riskMed + '66' },
   summaryCardActiveHigh: { borderWidth: 1.5, borderColor: Colors.riskHigh + '66' },
-  activeRiskFilterRow: { marginTop: -Space.s6, marginBottom: Space.s12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  activeRiskFilterRow: { marginTop: -Space.s4, marginBottom: Space.s12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   activeRiskFilterText: { ...Type.b3, color: Colors.textMuted, textTransform: 'capitalize' },
   clearRiskFilterText: { ...Type.l2, color: Colors.primary },
   body: { paddingHorizontal: Space.s20, paddingTop: Space.s16, paddingBottom: Space.s48 },

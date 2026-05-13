@@ -26,6 +26,7 @@ const BlogPostSchema = new mongoose.Schema(
     content: { type: String, trim: true, default: '' },
     coverImageUrl: { type: String, default: '' },
     tags: [{ type: String, trim: true }],
+    keyPoints: [{ type: String, trim: true }],
     category: { type: String, trim: true, default: 'Detection' },
     color: { type: String, default: () => CATEGORY_COLORS['Detection'] },
     readTime: { type: String, default: '' },

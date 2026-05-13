@@ -494,7 +494,11 @@ export default function PatientDashboard({ navigation }) {
             onAction={() => navigation.navigate('PatientAppointmentsActivity')}
           />
 
-          <View style={s.filterRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={s.appointmentFilterRow}
+          >
             {APPOINTMENT_FILTERS.map((item) => (
               <TouchableOpacity
                 key={item}
@@ -508,7 +512,7 @@ export default function PatientDashboard({ navigation }) {
                 <Text style={[s.chipText, appointmentFilter === item && s.chipTextActive]}>{item}</Text>
               </TouchableOpacity>
             ))}
-          </View>
+          </ScrollView>
 
           {filteredAppointments.length === 0 && !isBusy ? (
             <View style={{ marginTop: -Space.s48 }}>
@@ -816,6 +820,7 @@ const s = StyleSheet.create({
   chipTextActive: { color: Colors.primaryOnDark },
   filterRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: Space.s16 },
   filterChip: { marginRight: Space.s8, marginBottom: Space.s8 },
+  appointmentFilterRow: { flexDirection: 'row', alignItems: 'center', paddingBottom: Space.s2, marginBottom: Space.s16 },
 
   tip: { flexDirection: 'row', gap: Space.s12, backgroundColor: Colors.bgCard, borderRadius: Radius.xl, padding: Space.s20, borderLeftWidth: 4, borderLeftColor: Colors.primary, ...Shadow.sm, marginTop: Space.s24 },
   tipIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primaryDim, alignItems: 'center', justifyContent: 'center' },

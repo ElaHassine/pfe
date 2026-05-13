@@ -26,6 +26,12 @@ function normalizeTags(tags) {
     .filter(Boolean);
 }
 
+function normalizeList(values) {
+  if (!Array.isArray(values)) return [];
+
+  return values.map((value) => String(value || '').trim()).filter(Boolean);
+}
+
 function toBlogItem(blog) {
   return {
     id: String(blog._id),
@@ -36,7 +42,9 @@ function toBlogItem(blog) {
     content: blog.content || '',
     coverImageUrl: blog.coverImageUrl || '',
     tags: blog.tags || [],
+    keyPoints: blog.keyPoints || [],
     category: blog.category || 'Doctor Blog',
+    color: blog.color || '',
     readTime: blog.readTime || estimateReadTime(blog.content || blog.summary || ''),
     status: blog.status || 'draft',
     publishedAt: blog.publishedAt || null,
@@ -114,6 +122,7 @@ exports.createBlog = asyncHandler(async (req, res) => {
     content: String(req.body.content || '').trim(),
     coverImageUrl: String(req.body.coverImageUrl || '').trim(),
     tags: normalizeTags(req.body.tags),
+    keyPoints: normalizeList(req.body.keyPoints),
     category: String(req.body.category || '').trim() || 'Doctor Blog',
     readTime: String(req.body.readTime || '').trim() || estimateReadTime(req.body.content || req.body.summary || ''),
     status,
@@ -146,6 +155,7 @@ exports.updateBlog = asyncHandler(async (req, res) => {
   blog.content = String(req.body.content ?? blog.content ?? '').trim();
   blog.coverImageUrl = String(req.body.coverImageUrl ?? blog.coverImageUrl ?? '').trim();
   blog.tags = normalizeTags(req.body.tags ?? blog.tags);
+  blog.keyPoints = normalizeList(req.body.keyPoints ?? blog.keyPoints);
   blog.category = String(req.body.category ?? blog.category ?? '').trim() || 'Doctor Blog';
   blog.readTime = String(req.body.readTime || '').trim() || estimateReadTime(blog.content || blog.summary || '');
   blog.status = nextStatus;

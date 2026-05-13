@@ -17,7 +17,8 @@
       },
       "infoPlist": {
         "NSCameraUsageDescription": "Lesio uses your camera to capture skin lesion images.",
-        "NSPhotoLibraryUsageDescription": "Lesio accesses your photos to analyze skin lesions."
+        "NSPhotoLibraryUsageDescription": "Lesio accesses your photos to analyze skin lesions.",
+        "NSLocationWhenInUseUsageDescription": "Lesio uses your location to show nearby dermatologists."
       }
     },
     "android": {
@@ -29,7 +30,9 @@
       },
       "permissions": [
         "CAMERA",
-        "READ_EXTERNAL_STORAGE"
+        "READ_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
       ]
     },
     "plugins": [

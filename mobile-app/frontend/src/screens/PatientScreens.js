@@ -13,6 +13,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import { Colors, Type, Space, Radius, Shadow, HIT, riskConfig } from '../theme';
 import { Button, RiskBadge, ScanCard, DoctorCard, DoctorAvatar, StatCard, SectionHeader, EmptyState, AILoadingOverlay } from '../components';
 import { scanApi, catalogApi, analysisApi as catalogAnalysisApi, communityApi, chatApi, bookingApi, patientApi, blogApi } from '../services/api';
@@ -92,6 +93,43 @@ function buildMapUrls(doctor, coordinate) {
     android: `geo:0,0?q=${query}`,
     web: `https://www.google.com/maps/search/?api=1&query=${query}`,
   };
+}
+
+function haversineDistanceKm(a, b) {
+  const lat1 = Number(a?.latitude);
+  const lon1 = Number(a?.longitude);
+  const lat2 = Number(b?.latitude);
+  const lon2 = Number(b?.longitude);
+
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return Number.POSITIVE_INFINITY;
+
+  const toRad = (value) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLon = Math.sin(dLon / 2);
+  const root = sinLat * sinLat
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * sinLon * sinLon;
+  return 2 * earthRadiusKm * Math.asin(Math.min(1, Math.sqrt(root)));
+}
+
+function normalizeLocationText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function locationMatchesUserLocation(doctorLocation, userLocationText = '') {
+  const normalizedDoctorLocation = normalizeLocationText(doctorLocation);
+  const normalizedUserLocation = normalizeLocationText(userLocationText);
+
+  if (!normalizedDoctorLocation || !normalizedUserLocation) return false;
+
+  const placeParts = normalizedUserLocation.split(' ').filter((part) => part.length >= 3);
+  return placeParts.some((part) => normalizedDoctorLocation.includes(part));
 }
 
 // ─── Shared screen header ────────────────────────────────────────────────────
@@ -1773,10 +1811,14 @@ const lt = StyleSheet.create({
 // ═════════════════════════════════════════════════════════════════════════════
 
 export function DermatologistFinder({ navigation }) {
+  const { user } = useAuth();
   const [search, setSearch]       = useState('');
   const [activeFilter, setFilter] = useState('All');
   const [doctors, setDoctors] = useState([]);
+  const [userCoordinate, setUserCoordinate] = useState(null);
+  const [locationReady, setLocationReady] = useState(false);
   const [blockedDoctorIds, setBlockedDoctorIds] = useState([]);
+  const userLocationText = String(user?.profile?.location || '').trim();
   const [bookingDoctor, setBookingDoctor] = useState(null);
   const [bookingPreferredTime, setBookingPreferredTime] = useState('');
   const [bookingMessage, setBookingMessage] = useState('');
@@ -1796,6 +1838,30 @@ export function DermatologistFinder({ navigation }) {
     setBookingPreferredTime('');
     setBookingMessage('');
   }, [bookingSending]);
+
+  const loadNearbyLocation = useCallback(async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setUserCoordinate(null);
+        setLocationReady(true);
+        return;
+      }
+
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      setUserCoordinate({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      });
+    } catch (_error) {
+      setUserCoordinate(null);
+    } finally {
+      setLocationReady(true);
+    }
+  }, []);
 
   const submitBookingComposer = useCallback(async () => {
     if (!bookingDoctor?.id) {
@@ -1875,18 +1941,77 @@ export function DermatologistFinder({ navigation }) {
     };
 
     refresh();
+    loadNearbyLocation();
     const unsubscribe = navigation.addListener('focus', refresh);
 
     return () => {
       mounted = false;
       unsubscribe();
     };
-  }, [navigation]);
+  }, [navigation, loadNearbyLocation]);
 
-  const filtered = doctors.filter(d =>
-    (d.name.toLowerCase().includes(search.toLowerCase()) || d.specialty.toLowerCase().includes(search.toLowerCase())) &&
-    (activeFilter === 'All' || (activeFilter === 'Online' && d.available) || (activeFilter === 'Top Rated' && d.rating >= 4.8))
-  );
+  const filtered = useMemo(() => {
+    const normalizedSearch = search.toLowerCase().trim();
+
+    const scored = doctors
+      .map((doctor) => {
+        const matchesSearch =
+          String(doctor?.name || '').toLowerCase().includes(normalizedSearch)
+          || String(doctor?.specialty || '').toLowerCase().includes(normalizedSearch);
+
+        if (!matchesSearch) return null;
+
+        const doctorCoordinate = getDoctorCoordinate(doctor);
+        const distanceKm = userCoordinate && doctorCoordinate
+          ? haversineDistanceKm(userCoordinate, doctorCoordinate)
+          : Number.POSITIVE_INFINITY;
+        const textLocation = String(doctor?.location || doctor?.profile?.location || '');
+        const sameCityFallback = locationMatchesUserLocation(textLocation, userLocationText);
+
+        return {
+          ...doctor,
+          distanceKm,
+          sameCityFallback,
+        };
+      })
+      .filter(Boolean)
+      .filter((doctor) => {
+        if (activeFilter === 'All') return true;
+        if (activeFilter === 'Online') return !!doctor.available;
+        if (activeFilter === 'Top Rated') return Number(doctor.rating || 0) >= 4.8;
+        if (activeFilter === 'Nearby') {
+          // Show doctor if:
+          // 1. User has GPS coordinates (locationReady=true and userCoordinate exists), OR
+          // 2. Doctor location matches user profile location (city-level fallback)
+          const hasGPS = locationReady && userCoordinate;
+          const matchesCity = doctor.sameCityFallback;
+          
+          return hasGPS || matchesCity;
+        }
+        return true;
+      });
+
+    if (activeFilter === 'Nearby') {
+      return scored.sort((a, b) => {
+        // 1. Priority: doctors with calculable distance (have coordinates)
+        const aHasDistance = Number.isFinite(a.distanceKm) && a.distanceKm !== Number.POSITIVE_INFINITY;
+        const bHasDistance = Number.isFinite(b.distanceKm) && b.distanceKm !== Number.POSITIVE_INFINITY;
+        if (aHasDistance !== bHasDistance) return aHasDistance ? -1 : 1;
+
+        // 2. Then: city matches (for doctors without coordinates)
+        const aFallback = a.sameCityFallback ? 0 : 1;
+        const bFallback = b.sameCityFallback ? 0 : 1;
+        if (aFallback !== bFallback) return aFallback - bFallback;
+
+        // 3. Finally: by distance (closest first)
+        const aDistance = Number.isFinite(a.distanceKm) ? a.distanceKm : Number.POSITIVE_INFINITY;
+        const bDistance = Number.isFinite(b.distanceKm) ? b.distanceKm : Number.POSITIVE_INFINITY;
+        return aDistance - bDistance;
+      });
+    }
+
+    return scored;
+  }, [activeFilter, doctors, locationReady, search, userCoordinate, userLocationText]);
 
   return (
     <View style={{ flex: 1, backgroundColor: Colors.grey50 }}>
@@ -1929,7 +2054,15 @@ export function DermatologistFinder({ navigation }) {
         <View style={{ paddingHorizontal: Space.s20 }}>
           <Text style={df.resultCount}>{filtered.length} dermatologist{filtered.length !== 1 ? 's':''}  found</Text>
           {filtered.length === 0
-            ? <EmptyState iconName="users" title="No doctors found" subtitle="Try adjusting your search or filters" />
+            ? <EmptyState
+                iconName="users"
+                title="No doctors found"
+                subtitle={
+                  activeFilter === 'Nearby'
+                    ? (!locationReady ? 'Getting your location...' : 'No nearby doctors found in your area')
+                    : 'Try adjusting your search or filters'
+                }
+              />
             : filtered.map(doc => {
               const isBlocked = blockedDoctorSet.has(String(doc?.id || '').trim().toLowerCase());
               return (
@@ -2043,6 +2176,7 @@ export function DoctorDetailsScreen({ navigation, route }) {
   const { user } = useAuth();
   const [doctorDetails, setDoctorDetails] = useState(null);
   const [isLoadingDoctor, setIsLoadingDoctor] = useState(false);
+  const [mapCoordinate, setMapCoordinate] = useState(getDoctorCoordinate(doctor));
   const [rating, setRating] = useState(Number(doctor.userRating || 0));
   const [review, setReview] = useState('');
   const [reviews, setReviews] = useState([]);
@@ -2054,7 +2188,55 @@ export function DoctorDetailsScreen({ navigation, route }) {
 
   const activeDoctor = doctorDetails || doctor;
 
-  const coordinate = getDoctorCoordinate(activeDoctor);
+  const coordinate = mapCoordinate || getDoctorCoordinate(activeDoctor);
+
+  useEffect(() => {
+    const directCoordinate = getDoctorCoordinate(activeDoctor);
+    if (directCoordinate) {
+      setMapCoordinate(directCoordinate);
+      return;
+    }
+
+    const locationText = String(activeDoctor.location || activeDoctor.profile?.location || '').trim();
+    if (!locationText) {
+      setMapCoordinate(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const resolveCoordinate = async () => {
+      try {
+        const query = encodeURIComponent(locationText);
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${query}`, {
+          headers: {
+            Accept: 'application/json',
+          },
+        });
+
+        if (!response.ok) return;
+
+        const results = await response.json();
+        const firstResult = Array.isArray(results) ? results[0] : null;
+        const latitude = Number(firstResult?.lat);
+        const longitude = Number(firstResult?.lon);
+
+        if (!cancelled && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+          setMapCoordinate({ latitude, longitude });
+        }
+      } catch (_error) {
+        if (!cancelled) {
+          setMapCoordinate(null);
+        }
+      }
+    };
+
+    resolveCoordinate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDoctor]);
 
   useEffect(() => {
     let mounted = true;
@@ -2449,9 +2631,11 @@ export function DoctorDetailsScreen({ navigation, route }) {
 
           <View style={[dd.mapWrap, Shadow.sm]}>
             <DoctorMapView
+              key={coordinate ? `${coordinate.latitude},${coordinate.longitude}` : 'doctor-map-fallback'}
               pins={coordinate ? [{ id: String(activeDoctor.id || 'doctor'), coordinate }] : []}
               selectedId={String(activeDoctor.id || 'doctor')}
               height={220}
+              interactive={false}
               title="Cabinet map"
               subtitle={safeValue(activeDoctor.location || activeDoctor.profile?.location)}
             />
@@ -3337,6 +3521,8 @@ export function SkinEducationScreen({ navigation }) {
   const [articlesList, setArticlesList] = useState([]);
   const [doctorBlogs, setDoctorBlogs] = useState([]);
   const [search, setSearch] = useState('');
+  const [featuredIndex, setFeaturedIndex] = useState(0);
+  const [readingStats, setReadingStats] = useState({ totalRead: 0, favorites: 0 });
 
   useEffect(() => {
     let mounted = true;
@@ -3355,6 +3541,17 @@ export function SkinEducationScreen({ navigation }) {
     });
     return () => { mounted = false; };
   }, []);
+
+  // Auto-rotate featured carousel
+  useEffect(() => {
+    const allBlogs = [...articlesList, ...doctorBlogs];
+    if (allBlogs.length === 0) return;
+    
+    const interval = setInterval(() => {
+      setFeaturedIndex((prev) => (prev + 1) % allBlogs.length);
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [articlesList, doctorBlogs]);
 
   const ABCDE = [
     { letter:'A', title:'Asymmetry',  desc:"One half doesn't match the other. Normal moles are symmetrical.",           flag:true  },
@@ -3382,6 +3579,10 @@ export function SkinEducationScreen({ navigation }) {
         .map((item) => [item.category, item.color || CATEGORY_COLORS[item.category] || Colors.primary])
     ),
   };
+  
+  const allBlogs = [...articlesList, ...doctorBlogs];
+  const featuredBlog = allBlogs[featuredIndex % allBlogs.length] || null;
+  
   const articles = (catFilter === 'All' ? articlesList : articlesList.filter(a => a.category === catFilter)).filter((article) =>
     [article.title, article.summary, article.category].some((value) => String(value || '').toLowerCase().includes(search.toLowerCase()))
   );
@@ -3395,6 +3596,66 @@ export function SkinEducationScreen({ navigation }) {
       <ScreenHeader title="Skin Education" onBack={() => navigation.goBack()} rightIcon="search" rightLabel="Search blogs" />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: Space.s48 }}>
+
+        {/* Featured Blog Carousel */}
+        {featuredBlog && (
+          <View style={se.featuredSection}>
+            <LinearGradient 
+              colors={[`${featuredBlog.color}40`, `${featuredBlog.color}08`]} 
+              style={se.featuredCard}
+            >
+              <View style={se.featuredBadge}>
+                <Feather name="trending-up" size={14} color={Colors.textPrimary} />
+                <Text style={se.featuredBadgeText}>Featured</Text>
+              </View>
+              <Text style={se.featuredTitle} numberOfLines={2}>{featuredBlog.title}</Text>
+              <Text style={se.featuredSummary} numberOfLines={2}>{featuredBlog.summary}</Text>
+              <View style={se.featuredMeta}>
+                <Text style={se.featuredMetaText}>{featuredBlog.readTime}</Text>
+                <View style={se.metaDot} />
+                <Text style={se.featuredMetaText}>{formatBlogDate(featuredBlog)}</Text>
+              </View>
+              <TouchableOpacity 
+                style={[se.readButton, { backgroundColor: featuredBlog.color }]}
+                onPress={() => navigation.navigate('ArticleDetail', { article: featuredBlog })}
+                activeOpacity={0.82}
+              >
+                <Text style={se.readButtonText}>Read Article</Text>
+                <Feather name="arrow-right" size={14} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </LinearGradient>
+            
+            {/* Carousel Dots */}
+            <View style={se.dotsContainer}>
+              {allBlogs.map((_, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[se.dot, featuredIndex % allBlogs.length === idx && se.dotActive]}
+                  onPress={() => setFeaturedIndex(idx)}
+                />
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* Quick Stats */}
+        <View style={se.statsSection}>
+          <View style={[se.statCard, { backgroundColor: '#00C2B214' }]}>
+            <Feather name="book-open" size={20} color="#00C2B2" />
+            <Text style={se.statValue}>{allBlogs.length}</Text>
+            <Text style={se.statLabel}>Articles</Text>
+          </View>
+          <View style={[se.statCard, { backgroundColor: '#6366F114' }]}>
+            <Feather name="clock" size={20} color="#6366F1" />
+            <Text style={se.statValue}>{Math.ceil(allBlogs.reduce((sum, a) => sum + (Number(String(a.readTime || '').match(/\d+/)?.[0]) || 1), 0) / allBlogs.length)}m</Text>
+            <Text style={se.statLabel}>Avg. Read</Text>
+          </View>
+          <View style={[se.statCard, { backgroundColor: '#F59E0B14' }]}>
+            <Feather name="award" size={20} color="#F59E0B" />
+            <Text style={se.statValue}>{doctorArticles.length}</Text>
+            <Text style={se.statLabel}>Expert Posts</Text>
+          </View>
+        </View>
 
         {/* ABCDE Feature */}
         <LinearGradient colors={['#00C2B2','#0096A8']} style={se.abcdeFeature}>
@@ -3567,6 +3828,63 @@ function mapDoctorBlogToArticle(blog = {}) {
 }
 
 const se = StyleSheet.create({
+  featuredSection: { paddingHorizontal: Space.s20, paddingTop: Space.s12, paddingBottom: Space.s20 },
+  featuredCard: { 
+    borderRadius: Radius.xl, 
+    padding: Space.s20, 
+    backgroundColor: Colors.bgCard,
+    marginBottom: Space.s16,
+    ...Shadow.lg 
+  },
+  featuredBadge: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: Space.s10, 
+    backgroundColor: 'rgba(255,255,255,0.2)', 
+    paddingHorizontal: Space.s10, 
+    paddingVertical: Space.s4, 
+    borderRadius: Radius.full, 
+    alignSelf: 'flex-start',
+    marginBottom: Space.s12
+  },
+  featuredBadgeText: { ...Type.l3, color: Colors.textPrimary, fontWeight: '600' },
+  featuredTitle: { ...Type.d2, color: Colors.textOnLight, marginBottom: Space.s8, lineHeight: 28 },
+  featuredSummary: { ...Type.b2, color: Colors.grey700, marginBottom: Space.s12, lineHeight: 20 },
+  featuredMeta: { flexDirection: 'row', alignItems: 'center', gap: Space.s8, marginBottom: Space.s14 },
+  featuredMetaText: { ...Type.b3, color: Colors.textMuted },
+  metaDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: Colors.textMuted },
+  readButton: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    gap: Space.s8,
+    paddingHorizontal: Space.s16, 
+    paddingVertical: Space.s12, 
+    borderRadius: Radius.lg
+  },
+  readButtonText: { ...Type.l2, color: Colors.textPrimary, fontWeight: '600' },
+  dotsContainer: { flexDirection: 'row', justifyContent: 'center', gap: Space.s8, marginTop: Space.s14 },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.grey200 },
+  dotActive: { width: 24, backgroundColor: Colors.primary },
+  
+  statsSection: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    paddingHorizontal: Space.s20, 
+    marginBottom: Space.s20,
+    gap: Space.s8
+  },
+  statCard: { 
+    flex: 1,
+    alignItems: 'center', 
+    paddingVertical: Space.s14, 
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.bgCard,
+    ...Shadow.sm
+  },
+  statValue: { ...Type.d4, color: Colors.textOnLight, marginTop: Space.s8 },
+  statLabel: { ...Type.b3, color: Colors.textMuted, marginTop: Space.s4 },
+  
   abcdeFeature: { padding: Space.s24, paddingBottom: Space.s16 },
   abcdeTitle: { ...Type.d3, color: Colors.textPrimary, marginBottom: Space.s8 },
   abcdeSub: { ...Type.b2, color: 'rgba(255,255,255,0.78)', marginBottom: Space.s20, lineHeight:22 },
@@ -3601,6 +3919,8 @@ export function ArticleDetailScreen({ navigation, route }) {
     content:
       'Wear protective clothing, avoid peak UV hours (10am to 4pm), and reapply sunscreen every two hours. Document suspicious lesions with date-stamped photos to support early clinical review.',
   };
+  
+  const [readProgress, setReadProgress] = useState(0);
 
   const toRgb = (hex) => {
     const clean = String(hex || '').replace('#', '').trim();
@@ -3619,44 +3939,182 @@ export function ArticleDetailScreen({ navigation, route }) {
     : ['#ECFFFC', '#E2F8F5'];
 
   const fullContent = String(article.content || '').trim() || 'No content available for this blog yet.';
+  
+  // Extract key points from article
+  const keyPoints = article.keyPoints || [];
+  
+  // Calculate read time based on content length
+  const wordCount = fullContent.split(/\s+/).length;
+  const estimatedReadTime = Math.ceil(wordCount / 200); // 200 words per minute average
 
   return (
     <View style={{ flex: 1, backgroundColor: Colors.grey50 }}>
       <StatusBar barStyle="light-content" />
-      <ScreenHeader title="Read Full Blog" onBack={() => navigation.goBack()} />
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Space.s20, paddingBottom: Space.s48 }}>
+      <ScreenHeader
+        title="Skin Education"
+        onBack={() => navigation.goBack()}
+        rightIcon="search"
+        rightLabel="Search blogs"
+        onRight={() => navigation.navigate('SkinEducation')}
+      />
+
+      <View style={ad.progressWrap}>
+        <View style={ad.progressTrack}>
+          <View style={[ad.progressBar, { width: `${readProgress}%`, backgroundColor: articleColor }]} />
+        </View>
+      </View>
+
+      <ScrollView 
+        showsVerticalScrollIndicator={false} 
+        contentContainerStyle={{ paddingBottom: Space.s48 }}
+        scrollEventThrottle={16}
+        onScroll={(event) => {
+          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+          const progress = (contentOffset.y / (contentSize.height - layoutMeasurement.height)) * 100;
+          setReadProgress(Math.min(progress, 100));
+        }}
+      >
+        {/* Header Section */}
         <LinearGradient
           colors={gradientColors}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={[ad.header, Shadow.sm]}
         >
-          <View style={[ad.categoryPill, { backgroundColor: `${articleColor}20` }]}>
+          <View style={ad.categoryPill}>
             <Text style={[ad.categoryTxt, { color: articleColor }]}>{article.category || 'Blog'}</Text>
           </View>
           <Text style={ad.title}>{article.title}</Text>
           <Text style={ad.summary}>{article.summary}</Text>
+          
+          {/* Meta Information */}
+          <View style={ad.metaSection}>
+            <View style={ad.metaItem}>
+              <Feather name="clock" size={14} color={Colors.textMuted} />
+              <Text style={ad.metaText}>{estimatedReadTime} min read</Text>
+            </View>
+            {article.authorName && (
+              <View style={ad.metaItem}>
+                <Feather name="user" size={14} color={Colors.textMuted} />
+                <Text style={ad.metaText}>{article.authorName}</Text>
+              </View>
+            )}
+            {article.publishedAt && (
+              <View style={ad.metaItem}>
+                <Feather name="calendar" size={14} color={Colors.textMuted} />
+                <Text style={ad.metaText}>{new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: '2-digit' })}</Text>
+              </View>
+            )}
+          </View>
         </LinearGradient>
 
+        {/* Content Section */}
         <View style={[ad.bodyCard, Shadow.sm]}>
-          <Text style={ad.sectionTitle}>Content</Text>
           <Text style={ad.bodyText}>{fullContent}</Text>
         </View>
+
+        {/* Key Points */}
+        {keyPoints.length > 0 && (
+          <View style={ad.keyPointsSection}>
+            <Text style={ad.sectionTitle}>Key Takeaways</Text>
+            {keyPoints.map((point, idx) => (
+              <View key={idx} style={ad.keyPointItem}>
+                <View style={[ad.keyPointBullet, { backgroundColor: articleColor }]}>
+                  <Text style={ad.keyPointNumber}>{idx + 1}</Text>
+                </View>
+                <Text style={ad.keyPointText}>{point}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+
       </ScrollView>
     </View>
   );
 }
 
 const ad = StyleSheet.create({
-  header: { backgroundColor: Colors.bgCard, borderRadius: Radius.xl, padding: Space.s20, marginBottom: Space.s12 },
-  categoryPill: { alignSelf: 'flex-start', borderRadius: Radius.full, paddingHorizontal: Space.s10, paddingVertical: Space.s4, marginBottom: Space.s10 },
-  categoryTxt: { ...Type.l3 },
-  title: { ...Type.d3, color: Colors.textOnLight, marginBottom: Space.s8 },
+  progressWrap: {
+    paddingHorizontal: Space.s14,
+    paddingTop: Space.s10,
+    paddingBottom: Space.s6,
+    backgroundColor: Colors.bgCard,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.grey100,
+  },
+  progressTrack: { flex: 1, height: 3, backgroundColor: Colors.grey100, borderRadius: 1.5, overflow: 'hidden' },
+  progressBar: { height: '100%', borderRadius: 1.5 },
+  
+  header: { 
+    borderRadius: Radius.xl, 
+    padding: Space.s20, 
+    marginHorizontal: Space.s20,
+    marginTop: Space.s14,
+    marginBottom: Space.s12,
+    backgroundColor: Colors.bgCard,
+  },
+  categoryPill: { 
+    alignSelf: 'flex-start', 
+    borderRadius: Radius.full, 
+    paddingHorizontal: Space.s10, 
+    paddingVertical: Space.s5, 
+    marginBottom: Space.s12,
+    backgroundColor: Colors.grey100,
+    borderWidth: 1,
+    borderColor: Colors.grey200
+  },
+  categoryTxt: { ...Type.l3, fontWeight: '600' },
+  title: { ...Type.d2, color: Colors.textOnLight, marginBottom: Space.s10, lineHeight: 32 },
   summary: { ...Type.b2, color: Colors.grey700, lineHeight: 21 },
-  bodyCard: { backgroundColor: Colors.bgCard, borderRadius: Radius.xl, padding: Space.s20 },
-  sectionTitle: { ...Type.l1, color: Colors.textOnLight, marginBottom: Space.s10 },
-  bodyText: { ...Type.b2, color: Colors.grey700, lineHeight: 22, flex: 1 },
+  
+  metaSection: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: Space.s16, 
+    marginTop: Space.s14,
+    paddingTop: Space.s14,
+    borderTopWidth: 1,
+    borderTopColor: Colors.grey100
+  },
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: Space.s6 },
+  metaText: { ...Type.b3, color: Colors.textMuted },
+  
+  bodyCard: { 
+    backgroundColor: Colors.bgCard, 
+    borderRadius: Radius.xl, 
+    padding: Space.s20,
+    marginHorizontal: Space.s20,
+    marginBottom: Space.s16
+  },
+  sectionTitle: { ...Type.l1, color: Colors.textOnLight, marginBottom: Space.s12, fontWeight: '600' },
+  bodyText: { ...Type.b2, color: Colors.grey700, lineHeight: 24 },
+  
+  keyPointsSection: { 
+    marginHorizontal: Space.s20, 
+    marginBottom: Space.s16,
+    backgroundColor: Colors.bgCard,
+    borderRadius: Radius.xl,
+    padding: Space.s20,
+    ...Shadow.sm
+  },
+  keyPointItem: { 
+    flexDirection: 'row', 
+    gap: Space.s12, 
+    marginBottom: Space.s12,
+    alignItems: 'flex-start'
+  },
+  keyPointBullet: { 
+    width: 32, 
+    height: 32, 
+    borderRadius: 16, 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    marginTop: 2
+  },
+  keyPointNumber: { ...Type.l2, color: Colors.textPrimary, fontWeight: '700' },
+  keyPointText: { ...Type.b2, color: Colors.grey700, flex: 1, paddingTop: 4, lineHeight: 20 }
 });
 
 export function CommunityGuidelinesScreen({ navigation }) {
