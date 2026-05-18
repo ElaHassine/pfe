@@ -180,6 +180,8 @@ async function requestFormData(path, formData, options = {}) {
   return payload;
 }
 
+export { request, requestFormData };
+
 export const authApi = {
   register: (data) => request('/api/auth/register', { method: 'POST', body: data }),
   login: ({ email, password }) => request('/api/auth/login', { method: 'POST', body: { email, password } }),
@@ -342,6 +344,10 @@ export const chatApi = {
   }),
   getMessages: (threadId) => request(`/api/chat/threads/${threadId}/messages`),
   markThreadRead: (threadId) => request(`/api/chat/threads/${threadId}/read`, { method: 'POST' }),
+  setThreadPinned: (threadId, pinned) => request(`/api/chat/threads/${threadId}/pin`, {
+    method: 'PATCH',
+    body: { pinned },
+  }),
   sendMessage: (threadId, body) => request(`/api/chat/threads/${threadId}/messages`, {
     method: 'POST',
     body: { body },

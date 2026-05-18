@@ -75,8 +75,8 @@ function SlideIllustration({ slide, sz }) {
         )}
 
         {slide.id === 5 && [
-          { init: 'SC', name: 'Dr. Sarah Chen', avail: true },
-          { init: 'MW', name: 'Dr. Marcus Webb', avail: false },
+          { init: 'AB', name: 'Dr. Amina Ben Ali', avail: true },
+          { init: 'MS', name: 'Dr. Mourad Sghaier', avail: false },
         ].map((d, i) => (
           <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: sz * 0.035, paddingVertical: sz * 0.018, backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: Radius.full, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' }}>
             <View style={{ width: sz * 0.08, height: sz * 0.08, borderRadius: sz * 0.04, backgroundColor: slide.accent + '25', alignItems: 'center', justifyContent: 'center' }}>

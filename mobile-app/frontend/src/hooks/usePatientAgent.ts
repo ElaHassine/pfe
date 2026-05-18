@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
+import { request } from '../services/api';
 
 const API_URL = ((globalThis as any)?.process?.env?.EXPO_PUBLIC_API_URL) || 'http://localhost:4000';
 const TOKEN_KEY = 'lesio.auth.token';
@@ -223,20 +224,10 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
       messages: serializedMessages,
     };
 
-    const token = await AsyncStorage.getItem(TOKEN_KEY);
-    const response = await fetch(`${API_URL}${AGENT_CONVERSATIONS_ENDPOINT}`, {
+    const responsePayload = await request(AGENT_CONVERSATIONS_ENDPOINT, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(payload),
+      body: payload,
     });
-
-    const responsePayload = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(responsePayload?.message || responsePayload?.error || 'Failed to save agent conversation');
-    }
 
     const savedThread = normalizeStoredThread(responsePayload?.conversation || responsePayload);
     if (!savedThread) {
@@ -284,26 +275,19 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
               : [];
 
             for (const legacyThread of legacyThreads) {
-              const legacyResponse = await fetch(`${API_URL}${AGENT_CONVERSATIONS_ENDPOINT}`, {
+              const legacyPayload = await request(AGENT_CONVERSATIONS_ENDPOINT, {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                },
-                body: JSON.stringify({
+                body: {
                   conversationId: legacyThread.id,
                   title: legacyThread.title,
                   preview: legacyThread.preview,
                   messages: legacyThread.messages,
-                }),
+                },
               });
 
-              const legacyPayload = await legacyResponse.json().catch(() => null);
-              if (legacyResponse.ok) {
-                const savedLegacyThread = normalizeStoredThread(legacyPayload?.conversation || legacyPayload);
-                if (savedLegacyThread) {
-                  importedThreads.push(savedLegacyThread);
-                }
+              const savedLegacyThread = normalizeStoredThread(legacyPayload?.conversation || legacyPayload);
+              if (savedLegacyThread) {
+                importedThreads.push(savedLegacyThread);
               }
             }
 
@@ -313,14 +297,7 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
           }
         }
 
-        const response = await fetch(`${API_URL}${AGENT_CONVERSATIONS_ENDPOINT}`, {
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        });
-
-        const payload = await response.json().catch(() => null);
+        const payload = await request(AGENT_CONVERSATIONS_ENDPOINT);
         const normalizedThreads: AgentThread[] = Array.isArray(payload?.conversations)
           ? payload.conversations.map(normalizeStoredThread).filter(Boolean) as AgentThread[]
           : [];
@@ -373,12 +350,6 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
   }, []);
 
   const handleToolCall = useCallback(async (name: string, args: ToolCallArgs) => {
-    const token = await AsyncStorage.getItem(TOKEN_KEY);
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    };
-
     switch (name) {
       case 'query_patient_data': {
         const dataType = String(args?.dataType || '').trim();
@@ -396,20 +367,17 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
           return JSON.stringify({ error: `Unsupported data type: ${dataType}` });
         }
 
-        const url = new URL(`${API_URL}${endpoint}`);
-        if (dataType === 'recent_scans' || dataType === 'activity') {
-          url.searchParams.set('limit', String(limit));
-        }
-
-        const response = await fetch(url.toString(), { headers });
-        const payload = await response.json().catch(() => null);
+        const queryPath = (dataType === 'recent_scans' || dataType === 'activity')
+          ? `${endpoint}?limit=${encodeURIComponent(String(limit))}`
+          : endpoint;
+        const payload = await request(queryPath);
 
         if (dataType === 'recent_scans') {
           const compact = compactRecentScansPayload(payload, limit);
-          return JSON.stringify({ ok: response.ok, status: response.status, data: compact });
+          return JSON.stringify({ ok: true, status: 200, data: compact });
         }
 
-        return JSON.stringify({ ok: response.ok, status: response.status, data: payload });
+        return JSON.stringify({ ok: true, status: 200, data: payload });
       }
 
       case 'get_scan_detail': {
@@ -418,10 +386,9 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
           return JSON.stringify({ error: 'scanId is required' });
         }
 
-        const response = await fetch(`${API_URL}/api/scans/${scanId}`, { headers });
-        const payload = await response.json().catch(() => null);
+        const payload = await request(`/api/scans/${scanId}`);
         const compact = compactScanDetailPayload(payload);
-        return JSON.stringify({ ok: response.ok, status: response.status, data: compact });
+        return JSON.stringify({ ok: true, status: 200, data: compact });
       }
 
       case 'navigate_to_screen': {
@@ -472,19 +439,17 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
           return JSON.stringify({ error: 'message is required' });
         }
 
-        const response = await fetch(`${API_URL}/api/agent/send-doctor-message`, {
+        const payload = await request('/api/agent/send-doctor-message', {
           method: 'POST',
-          headers,
-          body: JSON.stringify({
+          body: {
             doctorName,
             message,
-          }),
+          },
         });
 
-        const payload = await response.json().catch(() => null);
-        return JSON.stringify({ 
-          ok: response.ok, 
-          status: response.status, 
+        return JSON.stringify({
+          ok: true,
+          status: 200,
           data: payload,
           message: payload?.message || payload?.error,
         });
@@ -510,25 +475,13 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
       for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration += 1) {
         const token = await AsyncStorage.getItem(TOKEN_KEY);
         const llmMessages = buildContextWindow(conversationHistoryRef.current);
-        const response = await fetch(`${API_URL}/api/agent`, {
+        const payload = await request('/api/agent', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({
+          body: {
             messages: llmMessages,
             tools,
-          }),
+          },
         });
-
-        const payload = await response.json().catch(() => null);
-        if (!response.ok) {
-          if (response.status === 401) {
-            throw new Error('Please sign in again to use the agent.');
-          }
-          throw new Error(payload?.error || `Agent request failed with status ${response.status}`);
-        }
 
         const choice = payload?.choices?.[0];
         const message = choice?.message;
@@ -616,18 +569,9 @@ export function usePatientAgent(systemPrompt: string, tools: ToolSpec[] = []): A
 
   const deleteThread = useCallback(async (threadId: string) => {
     const token = await AsyncStorage.getItem(TOKEN_KEY);
-    const response = await fetch(`${API_URL}${AGENT_CONVERSATIONS_ENDPOINT}/${encodeURIComponent(threadId)}`, {
+    const response = await request(`${AGENT_CONVERSATIONS_ENDPOINT}/${encodeURIComponent(threadId)}`, {
       method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
     });
-
-    if (!response.ok && response.status !== 404) {
-      const payload = await response.json().catch(() => null);
-      throw new Error(payload?.message || payload?.error || 'Failed to delete conversation');
-    }
 
     const filtered = threads.filter((thread) => thread.id !== threadId);
     setThreads(filtered);

@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Type, Space, Radius, Shadow, HIT, riskConfig } from '../theme';
 import { StatCard, ScanCard, SectionHeader, Button, EmptyState } from '../components';
@@ -114,7 +114,7 @@ function AppointmentCard({ item, onCancelSuccess }) {
       <View style={s.appointmentCardBottom}>
         {item.location && (
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: Space.s4 }}>
-            <Feather name="map-pin" size={12} color={Colors.textMuted} />
+            <MaterialCommunityIcons name="pin" size={12} color={Colors.textMuted} />
             <Text style={s.location}>{item.location}</Text>
           </View>
         )}

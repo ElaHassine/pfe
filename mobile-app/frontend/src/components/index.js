@@ -2,7 +2,7 @@ import React from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image,
 } from 'react-native';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Colors, Type, Space, Radius, Shadow, HIT, riskConfig } from '../theme';
 
 function stripTitlePrefix(fullName = '') {
@@ -118,7 +118,7 @@ export function ScanCard({ scan, onPress }) {
           <RiskBadge level={scan.riskLevel} size="sm" />
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: Space.s4, marginBottom: Space.s8 }}>
-          <Feather name="map-pin" size={11} color={Colors.textMuted} />
+          <MaterialCommunityIcons name="pin" size={11} color={Colors.textMuted} />
           <Text style={s.scanMeta} numberOfLines={1}>{safeLocation}</Text>
         </View>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
@@ -154,7 +154,7 @@ export function DoctorCard({ doctor, onBook, onChat, onPress, bookDisabled = fal
             <Text style={s.docRating}>{doctor.rating}</Text>
             <Text style={s.docReviews}>({doctor.reviews})</Text>
             <View style={s.metaDot} />
-            <Feather name="map-pin" size={11} color={Colors.textMuted} />
+            <MaterialCommunityIcons name="pin" size={11} color={Colors.textMuted} />
             <Text style={s.docDist}>{doctor.distance}</Text>
           </View>
         </View>

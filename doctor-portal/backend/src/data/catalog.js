@@ -1,7 +1,7 @@
 const doctors = [
-  { id: 'd1', name: 'Dr. Sarah Chen', specialty: 'Dermatology & Skin Oncology', rating: 4.9, reviews: 247, distance: '0.8 mi', available: true, nextSlot: 'Today, 3:00 PM', consultFee: '$120' },
-  { id: 'd2', name: 'Dr. Marcus Webb', specialty: 'Clinical Dermatology', rating: 4.7, reviews: 189, distance: '1.2 mi', available: true, nextSlot: 'Tomorrow, 10:00 AM', consultFee: '$95' },
-  { id: 'd3', name: 'Dr. Priya Nair', specialty: 'Dermatopathology', rating: 4.8, reviews: 312, distance: '2.1 mi', available: false, nextSlot: 'Thu, 2:30 PM', consultFee: '$140' },
+  { id: 'd1', name: 'Dr. Amina Ben Ali', specialty: 'Dermatology & Skin Oncology', rating: 4.9, reviews: 247, distance: '0.8 mi', available: true, nextSlot: 'Today, 3:00 PM', consultFee: '$120' },
+  { id: 'd2', name: 'Dr. Walid Trabelsi', specialty: 'Clinical Dermatology', rating: 4.7, reviews: 189, distance: '1.2 mi', available: true, nextSlot: 'Tomorrow, 10:00 AM', consultFee: '$95' },
+  { id: 'd3', name: 'Dr. Leila Hammami', specialty: 'Dermatopathology', rating: 4.8, reviews: 312, distance: '2.1 mi', available: false, nextSlot: 'Thu, 2:30 PM', consultFee: '$140' },
 ];
 
 const articles = [

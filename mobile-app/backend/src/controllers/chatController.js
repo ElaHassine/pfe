@@ -12,6 +12,7 @@ function serializeThread(thread) {
     avatarUrl: thread.doctorSnapshot?.avatarUrl || '',
     lastMessage: thread.lastMessage || '',
     lastMessageAt: thread.lastMessageAt || thread.updatedAt,
+    isPinned: Boolean(thread.isPinned),
     unread: thread.unreadForPatient || 0,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
@@ -31,10 +32,29 @@ function serializeMessage(message) {
 
 exports.listThreads = asyncHandler(async (req, res) => {
   const threads = await ChatThread.find({ patientId: req.user._id })
-    .sort({ lastMessageAt: -1 })
+    .sort({ isPinned: -1, lastMessageAt: -1, updatedAt: -1 })
     .lean();
 
   res.json({ threads: threads.map(serializeThread) });
+});
+
+exports.setThreadPinned = asyncHandler(async (req, res) => {
+  const { threadId } = req.params;
+  const pinned = Boolean(req.body?.pinned);
+
+  if (!mongoose.Types.ObjectId.isValid(threadId)) {
+    return res.status(400).json({ message: 'Invalid thread id' });
+  }
+
+  const thread = await ChatThread.findById(threadId);
+  if (!thread || String(thread.patientId) !== String(req.user._id)) {
+    return res.status(404).json({ message: 'Thread not found' });
+  }
+
+  thread.isPinned = pinned;
+  await thread.save();
+
+  res.json({ thread: serializeThread(thread) });
 });
 
 exports.upsertThread = asyncHandler(async (req, res) => {

@@ -6,7 +6,14 @@ const DEFAULT_API_URL = Platform.select({
   default: 'http://localhost:4001',
 });
 
+const DEFAULT_BLOG_API_URL = Platform.select({
+  android: 'http://10.0.2.2:4000',
+  ios: 'http://localhost:4000',
+  default: 'http://localhost:4000',
+});
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_URL;
+const BLOG_API_BASE_URL = process.env.EXPO_PUBLIC_BLOG_API_URL || process.env.EXPO_PUBLIC_MOBILE_API_URL || DEFAULT_BLOG_API_URL;
 
 const DOCTOR_TOKEN_KEY = 'lesio.doctor.token';
 let authToken = typeof window !== 'undefined' ? window.localStorage?.getItem(DOCTOR_TOKEN_KEY) || null : null;
@@ -41,6 +48,27 @@ async function request(path, options = {}) {
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(payload?.message || `Request failed with status ${response.status}`);
+  }
+
+  return payload;
+}
+
+async function blogRequest(path, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+
+  const response = await fetch(`${BLOG_API_BASE_URL}${path}`, {
+    method: options.method || 'GET',
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
   const payload = await response.json().catch(() => null);
 
   if (!response.ok) {
@@ -88,18 +116,48 @@ export const doctorPortalApi = {
     method: 'PATCH',
     body: payload,
   }),
+  listCommunityPosts: () => request('/api/doctor/community/posts'),
+  createCommunityPost: (payload) => request('/api/doctor/community/posts', { method: 'POST', body: payload }),
+  createCommunityPostForm: async (formData) => {
+    const headers = {};
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+    const response = await fetch(`${API_BASE_URL}/api/doctor/community/posts`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(payload?.message || `Request failed with status ${response.status}`);
+    return payload;
+  },
+  getCommunityPost: (postId) => request(`/api/doctor/community/posts/${postId}`),
+  addCommunityComment: (postId, body) => request(`/api/doctor/community/posts/${postId}/comments`, {
+    method: 'POST',
+    body: { body },
+  }),
+  addCommunityReply: (postId, commentId, body) => request(`/api/doctor/community/posts/${postId}/comments/${commentId}/replies`, {
+    method: 'POST',
+    body: { body },
+  }),
+  getCommunityComments: (postId) => request(`/api/doctor/community/posts/${postId}/comments`),
+  likeCommunityComment: (postId, commentId) => request(`/api/doctor/community/posts/${postId}/comments/${commentId}/like`, { method: 'POST' }),
+  unlikeCommunityComment: (postId, commentId) => request(`/api/doctor/community/posts/${postId}/comments/${commentId}/like`, { method: 'DELETE' }),
+  likeCommunityPost: (postId) => request(`/api/doctor/community/posts/${postId}/like`, { method: 'POST' }),
+  unlikeCommunityPost: (postId) => request(`/api/doctor/community/posts/${postId}/like`, { method: 'DELETE' }),
+  saveCommunityPost: (postId) => request(`/api/doctor/community/posts/${postId}/save`, { method: 'POST' }),
+  unsaveCommunityPost: (postId) => request(`/api/doctor/community/posts/${postId}/save`, { method: 'DELETE' }),
   listBlogs: () => request('/api/doctor/blogs'),
 };
 
 export const blogApi = {
-  listBlogs: () => request('/api/blogs'),
-  getBlog: (blogId) => request(`/api/blogs/${blogId}`),
+  listBlogs: () => blogRequest('/api/blogs'),
+  getBlog: (blogId) => blogRequest(`/api/blogs/${blogId}`),
 };
 
 export const catalogApi = {
   listDoctors: () => request('/api/catalog/doctors'),
   getDoctorDetails: (doctorId) => request(`/api/catalog/doctors/${doctorId}`),
-  listArticles: () => request('/api/catalog/articles'),
+  listArticles: () => blogRequest('/api/catalog/articles'),
   getRiskHistory: () => request('/api/catalog/risk-history'),
 };
 

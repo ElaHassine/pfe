@@ -5,7 +5,7 @@ const RICH_BLOG_CONTENT = [
     category: 'Detection',
     summary: 'Learn critical warning signs of melanoma and how early detection can save lives. Expert insights on the ABCDE rule and when to seek immediate care.',
     readTime: '7 min read',
-    authorName: 'Dr. Sarah Chen',
+    authorName: 'Dr. Amina Ben Ali',
     specialty: 'Dermatology & Skin Oncology',
     publishedAt: new Date('2024-01-15'),
     content: `
@@ -90,7 +90,7 @@ Early detection isn't just possible—it's empowering. Your vigilance could be l
     category: 'Skincare',
     summary: 'Discover how to build an effective skincare routine that protects sensitive skin without irritation. Science-based product recommendations and daily practices.',
     readTime: '6 min read',
-    authorName: 'Dr. Marcus Webb',
+    authorName: 'Dr. Walid Trabelsi',
     specialty: 'Clinical Dermatology',
     publishedAt: new Date('2024-01-12'),
     content: `
@@ -205,7 +205,7 @@ Your sensitive skin isn't a liability—it's an opportunity to practice intentio
     category: 'Prevention',
     summary: 'Deep dive into UVA, UVB, and UVC radiation. Learn how UV exposure causes premature aging, sunburn, and cancer—and what protection actually works.',
     readTime: '8 min read',
-    authorName: 'Dr. Priya Nair',
+    authorName: 'Dr. Leila Hammami',
     specialty: 'Dermatopathology',
     publishedAt: new Date('2024-01-10'),
     content: `
@@ -348,7 +348,7 @@ UV protection isn't vanity—it's fundamental preventive healthcare. Your future
     category: 'Treatment',
     summary: 'Adult acne isn\'t a teenager\'s problem anymore. Explore hormonal, lifestyle, and environmental factors—plus evidence-based treatments that work.',
     readTime: '7 min read',
-    authorName: 'Dr. Sarah Chen',
+    authorName: 'Dr. Nabil Haddad',
     specialty: 'Dermatology & Skin Oncology',
     publishedAt: new Date('2024-01-08'),
     content: `

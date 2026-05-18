@@ -24,7 +24,7 @@ If you have a custom PyTorch model, the `/api/catalog/analysis/gradcam` endpoint
 
 1. Install Python dependencies:
    ```bash
-   pip install torch torchvision pillow
+   pip install -r requirements.txt
    ```
 2. Configure backend `.env`:
    ```bash

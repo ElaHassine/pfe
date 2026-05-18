@@ -4,6 +4,7 @@ const Scan = require('../models/Scan');
 const Doctor = require('../models/Doctor');
 const DoctorReview = require('../models/DoctorReview');
 const { articles } = require('../data/catalog');
+const staticDoctors = require('../data/staticDoctors');
 const { computeGradCAM } = require('../services/gradcamService');
 const { inferLesionFromPyTorch } = require('../services/pytorchInferenceService');
 
@@ -90,6 +91,31 @@ function isDoctorOnline(doctor) {
   return Boolean(doctor?.presence?.isOnline && isFresh);
 }
 
+function normalizeStaticDoctor(doctor) {
+  return {
+    id: doctor.id,
+    name: doctor.name,
+    avatarUrl: doctor.avatarUrl || '',
+    email: doctor.email || 'Unavailable',
+    phone: doctor.phone || 'Unavailable',
+    location: doctor.location || 'Unavailable',
+    specialty: doctor.specialty || 'Dermatology',
+    rating: Number(doctor.rating || 0),
+    reviews: Number(doctor.reviews || 0),
+    distance: doctor.location || doctor.city || 'Tunisia',
+    available: Boolean(doctor.available),
+    online: Boolean(doctor.online),
+    nextSlot: doctor.nextSlot || 'Next available slot',
+    consultFee: doctor.consultFee || '80 DT',
+    city: doctor.city || '',
+    static: true,
+  };
+}
+
+function findStaticDoctor(doctorId) {
+  return staticDoctors.find((doctor) => String(doctor.id) === String(doctorId)) || null;
+}
+
 exports.listDoctors = asyncHandler(async (_req, res) => {
   const doctors = await Doctor.find({
     $and: [
@@ -149,11 +175,71 @@ exports.listDoctors = asyncHandler(async (_req, res) => {
     };
   });
 
-  res.json({ doctors: doctorList });
+  const seededDoctors = staticDoctors.map(normalizeStaticDoctor);
+  const mergedDoctors = [...seededDoctors, ...doctorList].reduce((accumulator, doctor) => {
+    if (accumulator.some((existing) => String(existing.id).toLowerCase() === String(doctor.id).toLowerCase())) {
+      return accumulator;
+    }
+    return [...accumulator, doctor];
+  }, []);
+
+  mergedDoctors.sort((left, right) => {
+    const leftStatic = left.static ? 0 : 1;
+    const rightStatic = right.static ? 0 : 1;
+    if (leftStatic !== rightStatic) return leftStatic - rightStatic;
+    const ratingDiff = Number(right.rating || 0) - Number(left.rating || 0);
+    if (ratingDiff !== 0) return ratingDiff;
+    return String(left.name || '').localeCompare(String(right.name || ''));
+  });
+
+  res.json({ doctors: mergedDoctors });
 });
 
 exports.getDoctorDetails = asyncHandler(async (req, res) => {
   const { doctorId } = req.params;
+
+  const staticDoctor = findStaticDoctor(doctorId);
+  if (staticDoctor) {
+    return res.json({
+      doctor: {
+        id: staticDoctor.id,
+        name: staticDoctor.name,
+        avatarUrl: staticDoctor.avatarUrl || '',
+        email: staticDoctor.email || 'Unavailable',
+        phone: staticDoctor.phone || 'Unavailable',
+        location: staticDoctor.location || 'Unavailable',
+        specialty: staticDoctor.specialty || 'Dermatology',
+        rating: Number(staticDoctor.rating || 0),
+        reviews: Number(staticDoctor.reviews || 0),
+        available: Boolean(staticDoctor.available),
+        online: Boolean(staticDoctor.online),
+        profile: {
+          firstName: staticDoctor.name.replace(/^Dr\.\s*/i, '').split(' ')[0] || '',
+          lastName: staticDoctor.name.replace(/^Dr\.\s*/i, '').split(' ').slice(1).join(' ') || '',
+          fullName: staticDoctor.name,
+          avatarUrl: staticDoctor.avatarUrl || '',
+          phone: staticDoctor.phone || '',
+          location: staticDoctor.location || '',
+          bio: `${staticDoctor.specialty} based in ${staticDoctor.city}, Tunisia.`,
+        },
+        credentials: {
+          licenseNumber: '',
+          hospital: staticDoctor.city ? `${staticDoctor.city} Medical Center` : '',
+          yearsExperience: 0,
+        },
+        availability: {
+          status: staticDoctor.available ? 'available' : 'offline',
+          nextSlot: staticDoctor.nextSlot || '',
+        },
+        presence: {
+          isOnline: Boolean(staticDoctor.online),
+          lastSeenAt: null,
+        },
+        active: true,
+        static: true,
+      },
+    });
+  }
 
   if (!mongoose.Types.ObjectId.isValid(doctorId)) {
     return res.status(400).json({ message: 'Invalid doctor id' });
@@ -236,6 +322,13 @@ exports.getDoctorDetails = asyncHandler(async (req, res) => {
 exports.listDoctorReviews = asyncHandler(async (req, res) => {
   const { doctorId } = req.params;
 
+  if (findStaticDoctor(doctorId)) {
+    return res.json({
+      reviews: [],
+      stats: { rating: 0, reviews: 0 },
+    });
+  }
+
   if (!mongoose.Types.ObjectId.isValid(doctorId)) {
     return res.status(400).json({ message: 'Invalid doctor id' });
   }
@@ -274,6 +367,10 @@ exports.upsertDoctorReview = asyncHandler(async (req, res) => {
   const { doctorId } = req.params;
   const rating = Number(req.body?.rating);
   const review = String(req.body?.review || '').trim();
+
+  if (findStaticDoctor(doctorId)) {
+    return res.status(404).json({ message: 'Doctor not found' });
+  }
 
   if (!mongoose.Types.ObjectId.isValid(doctorId)) {
     return res.status(400).json({ message: 'Invalid doctor id' });
@@ -316,6 +413,10 @@ exports.upsertDoctorReview = asyncHandler(async (req, res) => {
 
 exports.deleteDoctorReview = asyncHandler(async (req, res) => {
   const { doctorId } = req.params;
+
+  if (findStaticDoctor(doctorId)) {
+    return res.status(404).json({ message: 'Review not found' });
+  }
 
   if (!mongoose.Types.ObjectId.isValid(doctorId)) {
     return res.status(400).json({ message: 'Invalid doctor id' });
@@ -417,10 +518,22 @@ exports.analyzeWithGradCAM = asyncHandler(async (req, res) => {
   const estimatedAbcde = buildEstimatedAbcde(result.metrics, result.quality);
   const estimatedCharacteristics = buildEstimatedCharacteristics(result.metrics, result.quality, resolvedRiskLevel);
 
+  // Debug logging: record modelPrediction and resolved values for troubleshooting
+  try {
+    console.info('GradCAM analysis - modelPrediction:', JSON.stringify(modelPrediction || null));
+    console.info('GradCAM analysis - result.metrics:', JSON.stringify(result.metrics || null));
+    console.info('GradCAM analysis - resolvedLesionType:', resolvedLesionType, 'resolvedConfidence:', resolvedConfidence, 'isUncertain:', isUncertain);
+  } catch (e) {
+    console.info('GradCAM logging failed:', e && e.message);
+  }
+
   res.json({
     riskLevel: resolvedRiskLevel,
     confidence: resolvedConfidence,
     lesionType: resolvedLesionType,
+    predictedClass: modelPrediction?.predictedClass || null,
+    predictedIndex: modelPrediction?.predictedIndex ?? null,
+    predictedConfidence: modelPrediction?.confidence ? Math.round(Number(modelPrediction.confidence) * 100) : null,
     characteristics: estimatedCharacteristics,
     recommendation: resolvedRecommendation,
     abcde: estimatedAbcde,
@@ -429,6 +542,7 @@ exports.analyzeWithGradCAM = asyncHandler(async (req, res) => {
     heatmapShape: result.heatmapShape,
     quality: result.quality,
     metrics: result.metrics,
+    bbox: result.bbox || null,
     modelUsed: !!modelPrediction,
     modelType: modelPrediction?.modelType || null,
     modelMargin: modelPrediction?.margin || null,

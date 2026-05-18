@@ -3,9 +3,53 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
-function runPythonInference({ imagePath, modelPath, classNames }) {
+async function resolvePythonExecutable() {
+  const configuredPath = String(process.env.PYTHON_EXECUTABLE || '').trim();
+  const workspaceRoot = path.resolve(__dirname, '../../../../');
+  const localVirtualEnvCandidates = [
+    path.join(workspaceRoot, '.venv', 'Scripts', 'python.exe'),
+    path.join(workspaceRoot, 'venv', 'Scripts', 'python.exe'),
+    path.join(workspaceRoot, '.venv', 'bin', 'python'),
+    path.join(workspaceRoot, 'venv', 'bin', 'python'),
+  ];
+
+  const candidates = [];
+
+  if (configuredPath && !/^(python|python3|py)(?:\.exe)?$/i.test(configuredPath)) {
+    candidates.push(configuredPath);
+  }
+
+  candidates.push(...localVirtualEnvCandidates);
+
+  if (configuredPath) {
+    candidates.push(configuredPath);
+  }
+
+  candidates.push('python');
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    if (candidate === 'python' || candidate === 'python3' || candidate === 'py') {
+      return candidate;
+    }
+
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch (_error) {
+      continue;
+    }
+  }
+
+  return configuredPath || 'python';
+}
+
+async function runPythonInference({ imagePath, modelPath, classNames }) {
+  const pythonPath = await resolvePythonExecutable();
   return new Promise((resolve, reject) => {
-    const pythonPath = process.env.PYTHON_EXECUTABLE || 'python';
     const scriptPath = path.resolve(__dirname, '../ml/infer_pytorch.py');
 
     const args = [

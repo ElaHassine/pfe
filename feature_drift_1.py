@@ -98,7 +98,7 @@ def segment_lesion(image):
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
 
     _, thresh = cv2.threshold(
-        blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    	blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
 
     kernel = np.ones((5, 5), np.uint8)
@@ -149,17 +149,26 @@ def compute_color(image, mask):
 
 
 def compute_diameter(mask):
-    points = np.column_stack(np.where(mask > 0))
-    if len(points) < 2:
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    if not contours:
         return 0.0
-    dist = np.max([
-        np.linalg.norm(p1 - p2)
-        for p1 in points[::20]
-        for p2 in points[::20]
-    ])
+
+    cnt = max(contours, key=cv2.contourArea)
+
+    # Enclosing circle
+    (_, _), radius = cv2.minEnclosingCircle(cnt)
+
+    diameter = radius * 2
+
     h, w = mask.shape
     diag = np.sqrt(h**2 + w**2)
-    return float(np.clip(dist / diag, 0, 1))
+
+    return float(np.clip(diameter / diag, 0, 1))
 
 
 def extract_abcd(image):
@@ -175,7 +184,8 @@ def extract_abcd(image):
 # 4. FEATURE EXTRACTION
 # ==============================
 def extract_features(backbone, image):
-    tensor = transform(image).unsqueeze(0).to(DEVICE)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    tensor = transform(image_rgb).unsqueeze(0).to(DEVICE)
     with torch.no_grad():
         features = backbone(tensor)
     return features.cpu().numpy().flatten()
@@ -208,7 +218,8 @@ def compute_drift(f1, f2):
 # benign predictions. Now uses malignant class probabilities only.
 # ==============================
 def predict(model, image, class_names):
-    tensor = transform(image).unsqueeze(0).to(DEVICE)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    tensor = transform(image_rgb).unsqueeze(0).to(DEVICE)
 
     with torch.no_grad():
         logits = model(tensor)
@@ -261,6 +272,84 @@ def compute_risk(abcd, drift, malignancy_prob):
     return float(np.clip(risk, 0, 1))
 
 
+# ==============================
+# 8. DETECTION OVERLAY
+# ==============================
+def draw_detection(image, prediction, confidence):
+
+    img = image.copy()
+    h, w = img.shape[:2]
+    color = (0, 255, 0)       # green
+
+    # ── Lesion segmentation ──────────────────────
+    mask = segment_lesion(img)
+
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    if contours:
+        cnt = max(contours, key=cv2.contourArea)
+
+        x, y, bw, bh = cv2.boundingRect(cnt)
+
+        pad = 10
+
+        x1 = max(0, x - pad)
+        y1 = max(0, y - pad)
+        x2 = min(w, x + bw + pad)
+        y2 = min(h, y + bh + pad)
+
+    else:
+        x1, y1 = int(w * 0.1), int(h * 0.1)
+        x2, y2 = int(w * 0.9), int(h * 0.9)
+
+    # ── Bounding box ─────────────────────────────
+    cv2.rectangle(
+        img,
+        (x1, y1),
+        (x2, y2),
+        color,
+        2
+    )
+
+    # ── Main label ───────────────────────────────
+    label = f"{prediction} {confidence:.1%}"
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 2
+    thickness = 3
+
+    (lw, lh), baseline = cv2.getTextSize(
+        label,
+        font,
+        font_scale,
+        thickness
+    )
+    label_y = max(y1, lh + 15)
+
+    cv2.rectangle(
+        img,
+        (x1, label_y - lh - 10),
+        (x1 + lw + 10, label_y),
+        color,
+        -1
+    )
+
+    cv2.putText(
+        img,
+        label,
+        (x1 + 5, label_y - 5),
+        font,
+        font_scale,
+        (255,255,255),
+        thickness,
+        cv2.LINE_AA
+    )
+
+    return img
 # ==============================
 # 8. VISUALIZATION
 # ==============================
@@ -360,7 +449,25 @@ def run_pipeline(image_path_1, image_path_2=None):
 
     # Risk score — uses malignancy_prob instead of raw confidence
     risk = compute_risk(abcd, drift, malignancy_prob)
+    # ─────────────────────────────────
+# Create detection overlay
+# ─────────────────────────────────
+    detected = draw_detection(
+        img1,
+        pred1,
+        conf1
+    )
 
+# Save result
+    detected = cv2.resize(detected, (IMAGE_SIZE, IMAGE_SIZE))
+    cv2.imwrite("detection_result.jpg", detected)
+
+# Show result
+    plt.figure(figsize=(8,8))
+    plt.imshow(cv2.cvtColor(detected, cv2.COLOR_BGR2RGB))
+    plt.axis("off")
+    plt.title("AI Lesion Detection")
+    plt.show()
     # Visualize
     visualize(img1, img2, abcd, drift, drift_label, risk,
               pred1, pred2, conf1, conf2, malignancy_prob)
@@ -382,7 +489,7 @@ def run_pipeline(image_path_1, image_path_2=None):
 # ==============================
 if __name__ == "__main__":
     # Single image demo — simulates visit 2
-    result = run_pipeline("test.jpg")
+    result = run_pipeline("MEL1.jpg")
 
-    # Two real visits:
-    # result = run_pipeline("visit1.jpg", "visit2.jpg")
+    #Two real visits:
+    #result = run_pipeline("MEL1.jpg", "SCC8.png")

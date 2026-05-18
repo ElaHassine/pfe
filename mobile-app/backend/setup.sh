@@ -17,19 +17,7 @@ python -m venv venv
 
 # Install dependencies
 pip install --upgrade pip
-pip install flask==2.3.0
-pip install flask-cors==4.0.0
-pip install torch==2.0.0
-pip install torchvision==0.15.0
-pip install timm==0.9.0
-pip install opencv-python==4.7.0
-pip install numpy==1.24.0
-pip install scipy==1.10.0
-pip install scikit-learn==1.2.0
-pip install Pillow==9.5.0
-
-# For production deployment (optional):
-pip install gunicorn==20.1.0
+pip install -r requirements.txt
 
 echo "✅ Backend dependencies installed!"
 echo ""

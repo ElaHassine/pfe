@@ -5,17 +5,18 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  StatusBar, Alert, Animated, TextInput, Dimensions, Image,
+  StatusBar, Alert, Animated, TextInput, Dimensions, Image, PanResponder,
   ActivityIndicator, Platform, Modal, Pressable, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { Colors, Type, Space, Radius, Shadow, HIT, riskConfig } from '../theme';
 import { Button, RiskBadge, ScanCard, DoctorCard, DoctorAvatar, StatCard, SectionHeader, EmptyState, AILoadingOverlay } from '../components';
+import { RichBlogContent } from '../components/RichBlogContent';
 import { scanApi, catalogApi, analysisApi as catalogAnalysisApi, communityApi, chatApi, bookingApi, patientApi, blogApi } from '../services/api';
 import { analyzeImageWithDrift } from '../services/analysisApi';
 import { useAuth } from '../context/AuthContext';
@@ -130,6 +131,23 @@ function locationMatchesUserLocation(doctorLocation, userLocationText = '') {
 
   const placeParts = normalizedUserLocation.split(' ').filter((part) => part.length >= 3);
   return placeParts.some((part) => normalizedDoctorLocation.includes(part));
+}
+
+function getNearbyDoctorState(doctor, userCoordinate, userLocationText) {
+  const doctorCoordinate = getDoctorCoordinate(doctor);
+  const distanceKm = userCoordinate && doctorCoordinate
+    ? haversineDistanceKm(userCoordinate, doctorCoordinate)
+    : Number.POSITIVE_INFINITY;
+  const textLocation = String(doctor?.location || doctor?.profile?.location || '');
+  const sameCityFallback = locationMatchesUserLocation(textLocation, userLocationText);
+
+  return {
+    distanceKm,
+    sameCityFallback,
+    isNearby:
+      (Number.isFinite(distanceKm) && distanceKm <= 100)
+      || (!Number.isFinite(distanceKm) && sameCityFallback),
+  };
 }
 
 // ─── Shared screen header ────────────────────────────────────────────────────
@@ -1032,29 +1050,6 @@ export function AIResultScreen({ navigation, route }) {
             </View>
           </View>
 
-          {/* ABCDE */}
-          <View style={ar.section}>
-            <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom: Space.s16 }}>
-              <Text style={ar.sectionTitle}>ABCDE Analysis</Text>
-              <View style={{ flexDirection:'row', alignItems:'center', gap: Space.s4, backgroundColor: Colors.riskMedBg, paddingHorizontal: Space.s8, paddingVertical: 3, borderRadius: Radius.full }}>
-                <Feather name="flag" size={11} color={Colors.riskMed} />
-                <Text style={{ ...Type.l3, color: Colors.riskMed }}>{Object.values(result.abcde).filter(v=>v.flag).length} flags</Text>
-              </View>
-            </View>
-            {Object.entries(result.abcde).map(([key, val]) => (
-              <View key={key} style={[ar.abcdeRow, val.flag && { borderColor: Colors.riskMed + '50', borderWidth: 1.5 }]}>
-                <View style={[ar.abcdeLetter, { backgroundColor: val.flag ? Colors.riskMedBg : Colors.primaryDim }]}>
-                  <Text style={[ar.abcdeLetterTxt, { color: val.flag ? Colors.riskMed : Colors.primary }]}>{key}</Text>
-                </View>
-                <View style={{ flex:1 }}>
-                  <Text style={ar.abcdeLabel}>{val.label}</Text>
-                  <Text style={[ar.abcdeValue, val.flag && { color: Colors.riskMed }]}>{val.value}</Text>
-                </View>
-                {val.flag && <Feather name="alert-triangle" size={14} color={Colors.riskMed} />}
-              </View>
-            ))}
-          </View>
-
           <View style={ar.searchWrap}>
             <Feather name="search" size={16} color={Colors.textMuted} style={ar.searchIcon} />
             <TextInput
@@ -1756,7 +1751,7 @@ export function LesionTrackingScreen({ navigation, route }) {
                 ) : null}
                 <View style={{ flexDirection:'row', justifyContent:'space-between' }}>
                   <View style={{ flexDirection:'row', alignItems:'center', gap:4 }}>
-                    <Feather name="map-pin" size={11} color={Colors.textMuted} />
+                    <MaterialCommunityIcons name="pin" size={11} color={Colors.textMuted} />
                     <Text style={lt.tlLoc}>{scan.location || 'Unknown location'}</Text>
                   </View>
                   <Text style={[lt.tlConf, {color:cfg.color}]}>{scan.confidence}% conf.</Text>
@@ -1961,17 +1956,11 @@ export function DermatologistFinder({ navigation }) {
 
         if (!matchesSearch) return null;
 
-        const doctorCoordinate = getDoctorCoordinate(doctor);
-        const distanceKm = userCoordinate && doctorCoordinate
-          ? haversineDistanceKm(userCoordinate, doctorCoordinate)
-          : Number.POSITIVE_INFINITY;
-        const textLocation = String(doctor?.location || doctor?.profile?.location || '');
-        const sameCityFallback = locationMatchesUserLocation(textLocation, userLocationText);
+        const nearbyState = getNearbyDoctorState(doctor, userCoordinate, userLocationText);
 
         return {
           ...doctor,
-          distanceKm,
-          sameCityFallback,
+          ...nearbyState,
         };
       })
       .filter(Boolean)
@@ -1980,13 +1969,8 @@ export function DermatologistFinder({ navigation }) {
         if (activeFilter === 'Online') return !!doctor.available;
         if (activeFilter === 'Top Rated') return Number(doctor.rating || 0) >= 4.8;
         if (activeFilter === 'Nearby') {
-          // Show doctor if:
-          // 1. User has GPS coordinates (locationReady=true and userCoordinate exists), OR
-          // 2. Doctor location matches user profile location (city-level fallback)
-          const hasGPS = locationReady && userCoordinate;
-          const matchesCity = doctor.sameCityFallback;
-          
-          return hasGPS || matchesCity;
+          // Prefer real proximity when GPS is available, otherwise fall back to the city match.
+          return doctor.isNearby;
         }
         return true;
       });
@@ -2008,6 +1992,10 @@ export function DermatologistFinder({ navigation }) {
         const bDistance = Number.isFinite(b.distanceKm) ? b.distanceKm : Number.POSITIVE_INFINITY;
         return aDistance - bDistance;
       });
+    }
+
+    if (activeFilter === 'Top Rated') {
+      return scored.sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0));
     }
 
     return scored;
@@ -2079,17 +2067,7 @@ export function DermatologistFinder({ navigation }) {
             })
           }
 
-          {/* Emergency */}
-          <View style={df.emergency}>
-            <View style={df.emergencyIcon}>
-              <Feather name="alert-circle" size={24} color={Colors.riskHigh} />
-            </View>
-            <View style={{ flex:1 }}>
-              <Text style={df.emergencyTitle}>Need urgent consultation?</Text>
-              <Text style={df.emergencySub}>Connect with an online dermatologist now</Text>
-            </View>
-            <Button label="Now" variant="danger" size="sm" onPress={() => {}} />
-          </View>
+          
         </View>
       </ScrollView>
 
@@ -3088,7 +3066,7 @@ export function DermatologistMapScreen({ navigation }) {
               accessibilityLabel={`Focus ${doctor.name} on map`}
             >
               <View style={dm.listMarker}>
-                <Feather name="map-pin" size={13} color={Colors.primary} />
+                <MaterialCommunityIcons name="pin" size={13} color={Colors.primary} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={dm.listName}>{doctor.name}</Text>
@@ -3515,6 +3493,46 @@ const CATEGORY_COLORS = {
   'Case Studies': '#F97316',
 };
 
+function randomRecentDate(daysBack = 365) {
+  const now = Date.now();
+  const past = now - Math.floor(Math.random() * daysBack * 24 * 60 * 60 * 1000);
+  return new Date(past).toISOString();
+}
+
+function estimateReadTime(text = '') {
+  try {
+    const words = String(text).trim().split(/\s+/).filter(Boolean).length;
+    const minutes = Math.max(1, Math.round(words / 200));
+    return `${minutes} min read`;
+  } catch (_e) {
+    return '1 min read';
+  }
+}
+
+function normalizeEducationalArticle(article = {}) {
+  const id = article.id || article._id || `${article.title || 'article'}-${Math.random().toString(36).slice(2, 9)}`;
+  const title = article.title || article.headline || 'Untitled article';
+  const content = article.content || article.body || '';
+  const summary = article.summary || article.excerpt || (content ? String(content).slice(0, 160) + '...' : '');
+  const category = article.category || 'Education';
+  const readTime = article.readTime || estimateReadTime(content);
+  const updatedAt = article.updatedAt || article.modifiedAt || article.publishedAt || randomRecentDate(365);
+  const publishedAt = article.publishedAt || article.createdAt || updatedAt;
+
+  return {
+    ...article,
+    id,
+    title,
+    summary,
+    content,
+    category,
+    readTime,
+    updatedAt,
+    publishedAt,
+    color: CATEGORY_COLORS[category] || CATEGORY_COLORS['Education'],
+  };
+}
+
 export function SkinEducationScreen({ navigation }) {
   const [expanded, setExpanded] = useState(null);
   const [catFilter, setCat] = useState('All');
@@ -3531,7 +3549,7 @@ export function SkinEducationScreen({ navigation }) {
       blogApi.listBlogs(),
     ]).then(([articlesResponse, blogsResponse]) => {
       if (!mounted) return;
-      setArticlesList(articlesResponse.articles || []);
+      setArticlesList((articlesResponse.articles || []).map(normalizeEducationalArticle));
       setDoctorBlogs((blogsResponse.blogs || []).map(mapDoctorBlogToArticle));
     }).catch(() => {
       if (mounted) {
@@ -3582,6 +3600,30 @@ export function SkinEducationScreen({ navigation }) {
   
   const allBlogs = [...articlesList, ...doctorBlogs];
   const featuredBlog = allBlogs[featuredIndex % allBlogs.length] || null;
+
+  const goToFeaturedBlog = useCallback((direction) => {
+    if (allBlogs.length < 2) return;
+    setFeaturedIndex((prev) => {
+      const next = prev + direction;
+      return (next + allBlogs.length) % allBlogs.length;
+    });
+  }, [allBlogs.length]);
+
+  const featuredSwipeResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_, gestureState) => {
+      const horizontalMove = Math.abs(gestureState.dx);
+      const verticalMove = Math.abs(gestureState.dy);
+      return horizontalMove > 14 && horizontalMove > verticalMove;
+    },
+    onPanResponderRelease: (_, gestureState) => {
+      if (gestureState.dx <= -35) {
+        goToFeaturedBlog(1);
+      } else if (gestureState.dx >= 35) {
+        goToFeaturedBlog(-1);
+      }
+    },
+  }), [goToFeaturedBlog]);
   
   const articles = (catFilter === 'All' ? articlesList : articlesList.filter(a => a.category === catFilter)).filter((article) =>
     [article.title, article.summary, article.category].some((value) => String(value || '').toLowerCase().includes(search.toLowerCase()))
@@ -3603,6 +3645,7 @@ export function SkinEducationScreen({ navigation }) {
             <LinearGradient 
               colors={[`${featuredBlog.color}40`, `${featuredBlog.color}08`]} 
               style={se.featuredCard}
+              {...featuredSwipeResponder.panHandlers}
             >
               <View style={se.featuredBadge}>
                 <Feather name="trending-up" size={14} color={Colors.textPrimary} />
@@ -3620,7 +3663,7 @@ export function SkinEducationScreen({ navigation }) {
                 onPress={() => navigation.navigate('ArticleDetail', { article: featuredBlog })}
                 activeOpacity={0.82}
               >
-                <Text style={se.readButtonText}>Read Article</Text>
+                <Text style={se.readButtonText}>Read Blog</Text>
                 <Feather name="arrow-right" size={14} color={Colors.textPrimary} />
               </TouchableOpacity>
             </LinearGradient>
@@ -3657,28 +3700,7 @@ export function SkinEducationScreen({ navigation }) {
           </View>
         </View>
 
-        {/* ABCDE Feature */}
-        <LinearGradient colors={['#00C2B2','#0096A8']} style={se.abcdeFeature}>
-          <Text style={se.abcdeTitle}>The ABCDE Rule</Text>
-          <Text style={se.abcdeSub}>A clinical framework for identifying potential melanoma warning signs</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: Space.s12, paddingBottom:4 }}>
-            {ABCDE.map(item => (
-              <View key={item.letter} style={se.abcdeCard}>
-                <View style={se.abcdeLetter}>
-                  <Text style={se.abcdeLetterTxt}>{item.letter}</Text>
-                </View>
-                <Text style={se.abcdeCardTitle}>{item.title}</Text>
-                <Text style={se.abcdeCardDesc} numberOfLines={4}>{item.desc}</Text>
-                {item.flag && (
-                  <View style={se.warnBadge}>
-                    <Feather name="alert-triangle" size={11} color={Colors.textPrimary} />
-                    <Text style={se.warnTxt}>Warning sign</Text>
-                  </View>
-                )}
-              </View>
-            ))}
-          </ScrollView>
-        </LinearGradient>
+        
 
         {/* Search */}
         <View style={se.searchWrap}>
@@ -3791,18 +3813,7 @@ export function SkinEducationScreen({ navigation }) {
           ) : null}
         </View>
 
-        {/* UV Index */}
-        <View style={{ paddingHorizontal: Space.s20, marginTop: Space.s8 }}>
-          <SectionHeader title="UV Index Guide" />
-          {[{range:'0–2',label:'Low',color:'#00C48C',action:'Minimal protection needed'},{range:'3–5',label:'Moderate',color:'#FFAA00',action:'SPF 30+ recommended'},{range:'6–7',label:'High',color:'#FF7B00',action:'Protection essential'},{range:'8–10',label:'Very High',color:Colors.riskHigh,action:'Extra protection needed'},{range:'11+',label:'Extreme',color:'#9B59B6',action:'Avoid sun exposure'}].map((u,i) => (
-            <View key={i} style={{ flexDirection:'row', alignItems:'center', gap: Space.s12, backgroundColor: Colors.bgCard, borderRadius: Radius.md, padding: Space.s12, marginBottom: Space.s8, ...Shadow.sm }}>
-              <View style={{ width:10, height:10, borderRadius:5, backgroundColor: u.color }} />
-              <Text style={{ ...Type.l2, color: Colors.textOnLight, width:36 }}>{u.range}</Text>
-              <Text style={{ ...Type.l2, color: u.color, width:72 }}>{u.label}</Text>
-              <Text style={{ ...Type.b3, color: Colors.textMuted, flex:1 }}>{u.action}</Text>
-            </View>
-          ))}
-        </View>
+
       </ScrollView>
     </View>
   );
@@ -3848,7 +3859,7 @@ const se = StyleSheet.create({
     marginBottom: Space.s12
   },
   featuredBadgeText: { ...Type.l3, color: Colors.textPrimary, fontWeight: '600' },
-  featuredTitle: { ...Type.d2, color: Colors.textOnLight, marginBottom: Space.s8, lineHeight: 28 },
+  featuredTitle: { ...Type.d2, color: Colors.textOnLight, marginBottom: Space.s8, lineHeight: 38 },
   featuredSummary: { ...Type.b2, color: Colors.grey700, marginBottom: Space.s12, lineHeight: 20 },
   featuredMeta: { flexDirection: 'row', alignItems: 'center', gap: Space.s8, marginBottom: Space.s14 },
   featuredMetaText: { ...Type.b3, color: Colors.textMuted },
@@ -3858,6 +3869,7 @@ const se = StyleSheet.create({
     alignItems: 'center', 
     justifyContent: 'center', 
     gap: Space.s8,
+    marginTop: Space.s8,
     paddingHorizontal: Space.s16, 
     paddingVertical: Space.s12, 
     borderRadius: Radius.lg
@@ -3871,19 +3883,22 @@ const se = StyleSheet.create({
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     paddingHorizontal: Space.s20, 
+    marginVertical: Space.s16,
     marginBottom: Space.s20,
     gap: Space.s8
   },
   statCard: { 
     flex: 1,
     alignItems: 'center', 
-    paddingVertical: Space.s14, 
+    paddingTop: Space.s16,
+    paddingBottom: Space.s16,
+    paddingHorizontal: Space.s12,
     borderRadius: Radius.lg,
     backgroundColor: Colors.bgCard,
-    ...Shadow.sm
+    gap: Space.s8
   },
-  statValue: { ...Type.d4, color: Colors.textOnLight, marginTop: Space.s8 },
-  statLabel: { ...Type.b3, color: Colors.textMuted, marginTop: Space.s4 },
+  statValue: { ...Type.d4, color: Colors.textOnLight },
+  statLabel: { ...Type.b3, color: Colors.textMuted },
   
   abcdeFeature: { padding: Space.s24, paddingBottom: Space.s16 },
   abcdeTitle: { ...Type.d3, color: Colors.textPrimary, marginBottom: Space.s8 },
@@ -3938,7 +3953,43 @@ export function ArticleDetailScreen({ navigation, route }) {
     ? [`rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.14)`, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.06)`]
     : ['#ECFFFC', '#E2F8F5'];
 
-  const fullContent = String(article.content || '').trim() || 'No content available for this blog yet.';
+  function stripTitleFromContent(content = '', title = '') {
+    try {
+      const t = String(title || '').trim();
+      let c = String(content || '');
+      if (!t) return c;
+
+      const ci = c.trimStart();
+      if (ci.slice(0, t.length).toLowerCase() === t.toLowerCase()) {
+        c = ci.slice(t.length).replace(/^[:\s#=-]*\r?\n?/, '');
+        return c.trimStart();
+      }
+
+      if (/^#\s*/.test(ci)) {
+        const withoutHash = ci.replace(/^#\s*/, '');
+        if (withoutHash.slice(0, t.length).toLowerCase() === t.toLowerCase()) {
+          c = withoutHash.slice(t.length).replace(/^[:\s#=-]*\r?\n?/, '');
+          return c.trimStart();
+        }
+      }
+
+      const h1 = ci.match(/^<h1[^>]*>([\s\S]*?)<\/h1>\s*/i);
+      if (h1) {
+        const inner = h1[1].trim();
+        if (inner.toLowerCase() === t.toLowerCase() || inner.toLowerCase().includes(t.toLowerCase())) {
+          c = ci.replace(/^<h1[^>]*>[\s\S]*?<\/h1>\s*/i, '');
+          return c.trimStart();
+        }
+      }
+
+      return c;
+    } catch (_e) {
+      return content;
+    }
+  }
+
+  const rawContent = String(article.content || '').trim() || 'No content available for this blog yet.';
+  const fullContent = stripTitleFromContent(rawContent, article.title);
   
   // Extract key points from article
   const keyPoints = article.keyPoints || [];
@@ -4011,7 +4062,7 @@ export function ArticleDetailScreen({ navigation, route }) {
 
         {/* Content Section */}
         <View style={[ad.bodyCard, Shadow.sm]}>
-          <Text style={ad.bodyText}>{fullContent}</Text>
+          <RichBlogContent content={fullContent} color={articleColor} />
         </View>
 
         {/* Key Points */}
@@ -4067,7 +4118,7 @@ const ad = StyleSheet.create({
   },
   categoryTxt: { ...Type.l3, fontWeight: '600' },
   title: { ...Type.d2, color: Colors.textOnLight, marginBottom: Space.s10, lineHeight: 32 },
-  summary: { ...Type.b2, color: Colors.grey700, lineHeight: 21 },
+  summary: { ...Type.b2, color: Colors.grey700, lineHeight: 21, marginBottom: Space.s12 },
   
   metaSection: { 
     flexDirection: 'row', 
@@ -4079,6 +4130,7 @@ const ad = StyleSheet.create({
     borderTopColor: Colors.grey100
   },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: Space.s6 },
+  metaText: { ...Type.b3, color: Colors.textMuted },
   metaText: { ...Type.b3, color: Colors.textMuted },
   
   bodyCard: { 

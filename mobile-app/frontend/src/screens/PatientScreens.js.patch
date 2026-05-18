@@ -1,0 +1,30 @@
+*** Begin Patch
+*** Update File: c:\Users\pc\Documents\ela format pc\LSI3\PFE\lesio\mobile-app\frontend\src\screens\PatientScreens.js
+@@
+   statsSection: { 
+     flexDirection: 'row', 
+     justifyContent: 'space-between', 
+     paddingHorizontal: Space.s20, 
+     marginVertical: Space.s16,
+     marginBottom: Space.s20,
+     gap: Space.s8
+   },
+-  statCard: { 
+-    flex: 1,
+-    alignItems: 'center', 
+-    paddingVertical: Space.s14, 
+-    borderRadius: Radius.lg,
+-    backgroundColor: Colors.bgCard,
+-    gap: Space.s8
+-  },
++  statCard: { 
++    flex: 1,
++    alignItems: 'center', 
++    paddingTop: Space.s16,
++    paddingBottom: Space.s16,
++    paddingHorizontal: Space.s12,
++    borderRadius: Radius.lg,
++    backgroundColor: Colors.bgCard,
++    gap: Space.s8
++  },
+*** End Patch

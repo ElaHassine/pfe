@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import ActivityListScreen from '../components/ActivityListScreen';
 import { Colors, Type, Space, Radius, Shadow, HIT } from '../theme';
 import { Button } from '../components';
@@ -81,7 +81,7 @@ function AppointmentCard({ item, onCancelSuccess }) {
       <View style={s.appointmentCardBottom}>
         {item.location && (
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: Space.s4 }}>
-            <Feather name="map-pin" size={12} color={Colors.textMuted} />
+            <MaterialCommunityIcons name="pin" size={12} color={Colors.textMuted} />
             <Text style={s.location}>{item.location}</Text>
           </View>
         )}

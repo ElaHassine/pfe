@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, StyleSheet, Text, Platform } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Colors, Type, Space, Radius, Shadow } from '../theme';
 
 export default function DoctorMapView({
@@ -45,7 +45,7 @@ export default function DoctorMapView({
           {hasCoordinate && (
             <Marker coordinate={{ latitude, longitude }}>
               <View style={styles.pinDot}>
-                <Feather name="map-pin" size={16} color={Colors.primaryOnDark} />
+                <MaterialCommunityIcons name="pin" size={16} color={Colors.primaryOnDark} />
               </View>
             </Marker>
           )}
@@ -86,8 +86,8 @@ export default function DoctorMapView({
             onPress={() => onSelectPin?.(pin.id)}
           >
             <View style={[styles.pinDot, isActive && styles.pinDotActive]}>
-              <Feather
-                name="map-pin"
+              <MaterialCommunityIcons
+                name="pin"
                 size={isActive ? 16 : 14}
                 color={isActive ? Colors.primaryOnDark : Colors.primary}
               />

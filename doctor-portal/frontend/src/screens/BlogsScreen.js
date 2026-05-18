@@ -1,10 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, ActivityIndicator,
-  Alert, useWindowDimensions,
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  ActivityIndicator,
+  Alert,
+  useWindowDimensions,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { blogApi, catalogApi, doctorPortalApi } from '../services/api';
+import { LinearGradient } from 'expo-linear-gradient';
+import { catalogApi, doctorPortalApi } from '../services/api';
+import { RichBlogContentFull } from '../RichBlogContent';
 
 const BLOG_CATEGORIES = [
   { name: 'Detection', color: '#00C2B2', description: 'Identifying warning signs' },
@@ -19,9 +27,7 @@ const BLOG_CATEGORIES = [
   { name: 'Case Studies', color: '#F97316', description: 'Real-world examples' },
 ];
 
-const CATEGORY_COLORS = Object.fromEntries(
-  BLOG_CATEGORIES.map(cat => [cat.name, cat.color])
-);
+const CATEGORY_COLORS = Object.fromEntries(BLOG_CATEGORIES.map((cat) => [cat.name, cat.color]));
 
 const EMPTY_FORM = {
   title: '',
@@ -40,7 +46,7 @@ function formatDate(value) {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function normalizeBlog(blog) {
+function normalizeBlog(blog = {}) {
   return {
     id: blog.id,
     title: blog.title || 'Untitled draft',
@@ -58,29 +64,51 @@ function normalizeBlog(blog) {
   };
 }
 
+function normalizeEducationalArticle(article = {}) {
+  return {
+    id: article.id,
+    title: article.title || 'Untitled article',
+    summary: article.summary || 'Read the full article to learn more.',
+    content: article.content || '',
+    coverImageUrl: article.coverImageUrl || '',
+    tags: Array.isArray(article.tags) ? article.tags : Array.isArray(article.keyTakeaways) ? article.keyTakeaways : [],
+    category: article.category || 'Education',
+    readTime: article.readTime || '1 min',
+    status: 'published',
+    publishedAt: article.publishedAt || article.updatedAt || article.createdAt || null,
+    updatedAt: article.updatedAt || article.createdAt || null,
+    authorName: article.authorName || article.authorSnapshot?.name || 'Doctor',
+    authorDoctorId: article.authorDoctorId || '',
+  };
+}
+
 function getCategoryColor(category = '') {
   return CATEGORY_COLORS[category] || '#00C2B2';
 }
 
-export default function BlogsScreen({ doctor }) {
-  const { width } = useWindowDimensions();
+export default function BlogsScreen() {
+  const { width, height } = useWindowDimensions();
   const isWide = width >= 1100;
-  const currentDoctorId = String(doctor?._id || '');
-  const [myBlogs, setMyBlogs] = useState([]);
-  const [educationalArticles, setEducationalArticles] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
+  const detailScrollHeight = isWide ? Math.max(420, height - 280) : Math.max(360, Math.round(height * 0.48));
+  const drawerWidth = Math.min(420, Math.max(340, width * 0.28));
+
+  const [expertBlogs, setExpertBlogs] = useState([]);
+  const [publishedBlogs, setPublishedBlogs] = useState([]);
+  const [selectedSelection, setSelectedSelection] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [showBlogDrawer, setShowBlogDrawer] = useState(false);
 
-  const selectedBlog = myBlogs.find((item) => item.id === selectedId) || null;
+  const selectedBlog = selectedSelection?.source === 'education'
+    ? publishedBlogs.find((item) => item.id === selectedSelection.id) || null
+    : expertBlogs.find((item) => item.id === selectedSelection?.id) || null;
 
   const counts = useMemo(() => ({
-    authored: myBlogs.length,
-    drafts: myBlogs.filter((item) => item.status === 'draft').length,
-    educational: educationalArticles.length,
-  }), [myBlogs, educationalArticles]);
+    authored: expertBlogs.length,
+    drafts: expertBlogs.filter((item) => item.status !== 'published').length,
+  }), [expertBlogs]);
 
   const refreshBlogs = async () => {
     const [doctorResponse, articlesResponse] = await Promise.all([
@@ -88,36 +116,45 @@ export default function BlogsScreen({ doctor }) {
       catalogApi.listArticles(),
     ]);
 
-    const doctorItems = (doctorResponse.blogs || [])
-      .map(normalizeBlog)
-      .filter((item) => String(item.authorDoctorId) === currentDoctorId);
+    const doctorItems = (doctorResponse.blogs || []).map(normalizeBlog);
+    const educationalItems = (articlesResponse.articles || []).map(normalizeEducationalArticle);
 
-    setMyBlogs(doctorItems);
-    setEducationalArticles(articlesResponse.articles || []);
-    return { doctorItems };
-  };
+    setExpertBlogs(doctorItems);
+    setPublishedBlogs(educationalItems);
 
-  const loadBlogs = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const { doctorItems } = await refreshBlogs();
-      if (!selectedId && doctorItems.length) {
-        setSelectedId(doctorItems[0].id);
-      }
-    } catch (loadError) {
-      setError(loadError?.message || 'Could not load blogs right now.');
-    } finally {
-      setLoading(false);
-    }
+    return { doctorItems, publishedItems: educationalItems };
   };
 
   useEffect(() => {
+    let mounted = true;
+
+    const loadBlogs = async () => {
+      try {
+        setLoading(true);
+        setError('');
+        const { doctorItems, publishedItems } = await refreshBlogs();
+        if (!mounted) return;
+        if (!selectedSelection && doctorItems.length) {
+          setSelectedSelection({ source: 'expert', id: doctorItems[0].id });
+        } else if (!selectedSelection && publishedItems.length) {
+          setSelectedSelection({ source: 'education', id: publishedItems[0].id });
+        }
+      } catch (loadError) {
+        if (!mounted) return;
+        setError(loadError?.message || 'Could not load blogs right now.');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+
     loadBlogs();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   useEffect(() => {
-    if (!selectedBlog) {
+    if (!selectedBlog || selectedSelection?.source === 'education' || selectedSelection?.source === 'expert') {
       setForm(EMPTY_FORM);
       return;
     }
@@ -131,12 +168,15 @@ export default function BlogsScreen({ doctor }) {
       category: selectedBlog.category || 'Detection',
       status: selectedBlog.status || 'draft',
     });
-  }, [selectedBlog]);
+  }, [selectedBlog, selectedSelection?.source]);
 
   const resetDraft = () => {
-    setSelectedId(null);
+    setSelectedSelection(null);
     setForm(EMPTY_FORM);
   };
+
+  const openBlogDrawer = () => setShowBlogDrawer(true);
+  const closeBlogDrawer = () => setShowBlogDrawer(false);
 
   const buildPayload = (nextStatus) => ({
     title: form.title.trim(),
@@ -144,7 +184,7 @@ export default function BlogsScreen({ doctor }) {
     content: form.content.trim(),
     coverImageUrl: form.coverImageUrl.trim(),
     tags: form.tagsText.split(',').map((tag) => tag.trim()).filter(Boolean),
-      category: form.category.trim() || 'Detection',
+    category: form.category.trim() || 'Detection',
     status: nextStatus,
   });
 
@@ -166,7 +206,7 @@ export default function BlogsScreen({ doctor }) {
 
       const saved = normalizeBlog(response.blog);
       await refreshBlogs();
-      setSelectedId(saved.id);
+      setSelectedSelection({ source: 'draft', id: saved.id });
       setForm({
         title: saved.title === 'Untitled draft' ? '' : saved.title,
         summary: saved.summary === 'Write a short summary for patients.' ? '' : saved.summary,
@@ -195,9 +235,9 @@ export default function BlogsScreen({ doctor }) {
           try {
             setSaving(true);
             await doctorPortalApi.deleteBlog(selectedBlog.id);
-            const remaining = myBlogs.filter((item) => item.id !== selectedBlog.id);
-            setMyBlogs(remaining);
-            setSelectedId(remaining[0]?.id || null);
+            const remaining = expertBlogs.filter((item) => item.id !== selectedBlog.id);
+            setExpertBlogs(remaining);
+            setSelectedSelection(remaining[0]?.id ? { source: 'expert', id: remaining[0].id } : null);
             await refreshBlogs();
           } catch (deleteError) {
             setError(deleteError?.message || 'Could not delete the blog right now.');
@@ -209,54 +249,42 @@ export default function BlogsScreen({ doctor }) {
     ]);
   };
 
-  const BlogCardList = ({ title, subtitle, items, editable }) => (
+  const BlogCardList = ({ title, subtitle, items, selectable, selectedSource }) => (
     <View style={{ flex: 1, minWidth: isWide ? 360 : '100%' }}>
       <View style={{ marginBottom: 14 }}>
         <Text style={{ fontFamily: 'Sora_700Bold', fontSize: 18, color: '#1A2235' }}>{title}</Text>
         {subtitle ? <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 12, color: '#6B7A99', marginTop: 4 }}>{subtitle}</Text> : null}
       </View>
 
-      <ScrollView style={{ maxHeight: isWide ? undefined : 320 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 8 }}>
+      <ScrollView style={{ maxHeight: isWide ? Math.max(420, height - 240) : 320 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 8 }}>
         {items.map((blog) => (
           <TouchableOpacity
             key={blog.id}
-            onPress={() => editable && setSelectedId(blog.id)}
-            activeOpacity={editable ? 0.8 : 1}
+            onPress={() => selectable && setSelectedSelection({ source: selectedSource, id: blog.id })}
+            activeOpacity={selectable ? 0.8 : 1}
             style={{
-              backgroundColor: editable && blog.id === selectedId ? '#EEFDFB' : '#fff',
+              backgroundColor: '#fff',
               borderRadius: 18,
               borderWidth: 1,
-              borderColor: editable && blog.id === selectedId ? '#00C2B2' : '#E6EDF7',
-              padding: 16,
+              borderColor: selectable && selectedSelection?.id === blog.id && selectedSelection?.source === selectedSource ? '#00C2B2' : '#E6EDF7',
+              overflow: 'hidden',
+              flexDirection: 'row',
             }}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: blog.status === 'published' ? '#31A24C' : '#FFAA00' }} />
-                <Text numberOfLines={1} style={{ fontFamily: 'DMSans_500Medium', fontSize: 14, color: '#1A2235', flex: 1 }}>{blog.title}</Text>
-              </View>
-              <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 11, color: blog.status === 'published' ? '#31A24C' : '#FFAA00', textTransform: 'uppercase' }}>{blog.status}</Text>
-            </View>
-            <Text numberOfLines={2} style={{ fontFamily: 'DMSans_400Regular', fontSize: 13, color: '#6B7A99', lineHeight: 18 }}>{blog.summary}</Text>
-            {blog.content ? (
-              <Text numberOfLines={3} style={{ fontFamily: 'DMSans_400Regular', fontSize: 12, color: '#7D8AA8', lineHeight: 18, marginTop: 8 }}>
-                {blog.content}
-              </Text>
-            ) : null}
-            {Array.isArray(blog.tags) && blog.tags.length ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, marginTop: 10 }}>
-                {blog.tags.slice(0, 4).map((tag, idx) => (
-                  <View key={`${blog.id}-tag-${idx}`} style={{ backgroundColor: '#F1F5FC', borderWidth: 1, borderColor: '#E2E9F5', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 }}>
-                    <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 10, color: '#5A6A8B' }}>#{tag}</Text>
+            <View style={{ width: 4, backgroundColor: getCategoryColor(blog.category), borderTopLeftRadius: 18, borderBottomLeftRadius: 18 }} />
+            <View style={{ flex: 1, padding: 16 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                  <View style={{ backgroundColor: getCategoryColor(blog.category) + '20', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 }}>
+                    <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 10, color: getCategoryColor(blog.category) }}>{blog.category}</Text>
                   </View>
-                ))}
-              </ScrollView>
-            ) : null}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
-              <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 11, color: '#9AA6BD' }}>{blog.readTime} · {formatDate(blog.updatedAt)}</Text>
-              <View style={{ backgroundColor: getCategoryColor(blog.category) + '20', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
-                <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 11, color: getCategoryColor(blog.category) }}>{blog.category}</Text>
+                </View>
               </View>
+              <Text numberOfLines={2} style={{ fontFamily: 'Sora_700Bold', fontSize: 16, color: '#1A2235', lineHeight: 22, marginBottom: 6 }}>{blog.title}</Text>
+              <Text numberOfLines={2} style={{ fontFamily: 'DMSans_400Regular', fontSize: 13, color: '#6B7A99', lineHeight: 18 }}>{blog.summary}</Text>
+              <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 11, color: '#9AA6BD', marginTop: 8 }}>
+                {blog.readTime || '1 min read'}{formatDate(blog.updatedAt) ? ` · ${formatDate(blog.updatedAt)}` : ''}
+              </Text>
             </View>
           </TouchableOpacity>
         ))}
@@ -264,9 +292,9 @@ export default function BlogsScreen({ doctor }) {
         {!loading && items.length === 0 ? (
           <View style={{ backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: '#E6EDF7', padding: 20, alignItems: 'center' }}>
             <Feather name="file-text" size={28} color="#A8B4CC" />
-            <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 14, color: '#1A2235', marginTop: 10 }}>{editable ? 'No blogs yet' : 'No published blogs yet'}</Text>
+            <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 14, color: '#1A2235', marginTop: 10 }}>{selectable ? 'No blogs yet' : 'No published blogs yet'}</Text>
             <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 13, color: '#6B7A99', marginTop: 4, textAlign: 'center' }}>
-              {editable ? 'Create a draft to start writing your first patient article.' : 'Published blogs from doctors will appear here.'}
+              {selectable ? 'Create a draft to start writing your first patient article.' : 'Published blogs from the mobile app will appear here.'}
             </Text>
           </View>
         ) : null}
@@ -275,63 +303,105 @@ export default function BlogsScreen({ doctor }) {
   );
 
   const editorPanel = (
-    <View style={{ flex: 1, minWidth: isWide ? 380 : '100%', backgroundColor: '#fff', borderRadius: 24, borderWidth: 1, borderColor: '#E6EDF7', padding: 20 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-        <View>
-          <Text style={{ fontFamily: 'Sora_700Bold', fontSize: 18, color: '#1A2235' }}>{selectedBlog ? 'Edit blog' : 'Create blog'}</Text>
-          <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 12, color: '#6B7A99', marginTop: 3 }}>Drafts stay private until you publish them.</Text>
-        </View>
-        {selectedBlog ? (
-          <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 11, color: selectedBlog.status === 'published' ? '#31A24C' : '#FFAA00', textTransform: 'uppercase' }}>{selectedBlog.status}</Text>
-        ) : null}
-      </View>
+    <View style={{ flex: 1, minWidth: isWide ? 0 : '100%', backgroundColor: '#fff', borderRadius: 24, borderWidth: 1, borderColor: '#E6EDF7', padding: 20, height: isWide ? Math.max(600, height - 120) : undefined }}>
+      {selectedSelection?.source === 'published' ? (
+        <View style={{ gap: 14, flex: 1 }}>
+          <LinearGradient
+            colors={[`${getCategoryColor(selectedBlog?.category)}40`, `${getCategoryColor(selectedBlog?.category)}08`]}
+            style={{ borderRadius: 24, padding: 20, backgroundColor: '#fff' }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+              <View style={{ flex: 1 }}>
+                <View style={{ alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.22)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Feather name="book-open" size={14} color="#1A2235" />
+                  <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 11, color: '#1A2235' }}>Blog</Text>
+                </View>
+                <Text style={{ fontFamily: 'Sora_700Bold', fontSize: 24, color: '#1A2235', lineHeight: 32, marginBottom: 8 }}>{selectedBlog?.title}</Text>
+                <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 13, color: '#3F516F', lineHeight: 20, marginBottom: 12 }}>{selectedBlog?.summary}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 11, color: '#3F516F' }}>{selectedBlog?.readTime}</Text>
+                  <View style={{ width: 3, height: 3, borderRadius: 1.5, backgroundColor: '#3F516F' }} />
+                  <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 11, color: '#3F516F' }}>{formatDate(selectedBlog?.publishedAt || selectedBlog?.updatedAt)}</Text>
+                </View>
+              </View>
+              {isWide ? (
+                <TouchableOpacity onPress={openBlogDrawer} activeOpacity={0.75} style={{ backgroundColor: 'rgba(255,255,255,0.22)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Feather name="list" size={15} color="#1A2235" />
+                  <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 11, color: '#1A2235' }}>Blogs</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </LinearGradient>
 
-      {error ? (
-        <View style={{ backgroundColor: 'rgba(255,71,87,0.08)', borderColor: 'rgba(255,71,87,0.2)', borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 14 }}>
-          <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 12, color: '#FF4757' }}>{error}</Text>
+          <View style={{ flex: 1, minHeight: detailScrollHeight, borderRadius: 20, borderWidth: 1, borderColor: '#E6EDF7', backgroundColor: '#FFFFFF', overflow: 'hidden' }}>
+            <ScrollView nestedScrollEnabled showsVerticalScrollIndicator contentContainerStyle={{ padding: 20, paddingBottom: 28 }} style={{ maxHeight: detailScrollHeight }}>
+              <RichBlogContentFull content={selectedBlog?.content || ''} color={getCategoryColor(selectedBlog?.category)} />
+            </ScrollView>
+          </View>
         </View>
-      ) : null}
-
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 14, paddingBottom: 24 }}>
-        <Field label="Title" value={form.title} onChangeText={(value) => setForm((prev) => ({ ...prev, title: value }))} placeholder="How to recognize early warning signs of melanoma" />
-        <Field label="Summary" value={form.summary} onChangeText={(value) => setForm((prev) => ({ ...prev, summary: value }))} placeholder="A short introduction patients can understand." multiline inputStyle={{ minHeight: 96, textAlignVertical: 'top' }} />
-        <Field label="Cover image URL" value={form.coverImageUrl} onChangeText={(value) => setForm((prev) => ({ ...prev, coverImageUrl: value }))} placeholder="https://..." />
-        <Field label="Tags" value={form.tagsText} onChangeText={(value) => setForm((prev) => ({ ...prev, tagsText: value }))} placeholder="prevention, screening, melanoma" />
-        
-        <View>
-          <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 13, color: '#3A4560', marginBottom: 10 }}>Category</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingBottom: 4 }}>
-            {BLOG_CATEGORIES.map((cat) => (
-              <TouchableOpacity
-                key={cat.name}
-                onPress={() => setForm((prev) => ({ ...prev, category: cat.name }))}
-                activeOpacity={0.7}
-                style={{
-                  backgroundColor: form.category === cat.name ? cat.color : cat.color + '15',
-                  borderWidth: form.category === cat.name ? 2 : 1,
-                  borderColor: form.category === cat.name ? cat.color : cat.color + '40',
-                  borderRadius: 12,
-                  paddingHorizontal: 14,
-                  paddingVertical: 8,
-                  minWidth: 110,
-                }}
-              >
-                <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 12, color: form.category === cat.name ? '#FFFFFF' : cat.color, textAlign: 'center' }}>
-                  {cat.name}
-                </Text>
+      ) : (
+        <>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <View>
+              <Text style={{ fontFamily: 'Sora_700Bold', fontSize: 18, color: '#1A2235' }}>{selectedBlog ? 'Blog' : 'Create draft'}</Text>
+              <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 12, color: '#6B7A99', marginTop: 3 }}>Tap a blog to read it, or start a new draft.</Text>
+            </View>
+            {isWide ? (
+              <TouchableOpacity onPress={openBlogDrawer} activeOpacity={0.75} style={{ backgroundColor: '#EEF7FB', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Feather name="list" size={15} color="#0F395B" />
+                <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 11, color: '#0F395B' }}>Blogs</Text>
               </TouchableOpacity>
-            ))}
+            ) : null}
+          </View>
+
+          {error ? (
+            <View style={{ backgroundColor: 'rgba(255,71,87,0.08)', borderColor: 'rgba(255,71,87,0.2)', borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 14 }}>
+              <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 12, color: '#FF4757' }}>{error}</Text>
+            </View>
+          ) : null}
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 14, paddingBottom: 24 }}>
+            <Field label="Title" value={form.title} onChangeText={(value) => setForm((prev) => ({ ...prev, title: value }))} placeholder="How to recognize early warning signs of melanoma" />
+            <Field label="Summary" value={form.summary} onChangeText={(value) => setForm((prev) => ({ ...prev, summary: value }))} placeholder="A short introduction patients can understand." multiline inputStyle={{ minHeight: 96, textAlignVertical: 'top' }} />
+            <Field label="Cover image URL" value={form.coverImageUrl} onChangeText={(value) => setForm((prev) => ({ ...prev, coverImageUrl: value }))} placeholder="https://..." />
+            <Field label="Tags" value={form.tagsText} onChangeText={(value) => setForm((prev) => ({ ...prev, tagsText: value }))} placeholder="prevention, screening, melanoma" />
+
+            <View>
+              <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 13, color: '#3A4560', marginBottom: 10 }}>Category</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingBottom: 4 }}>
+                {BLOG_CATEGORIES.map((cat) => (
+                  <TouchableOpacity
+                    key={cat.name}
+                    onPress={() => setForm((prev) => ({ ...prev, category: cat.name }))}
+                    activeOpacity={0.7}
+                    style={{
+                      backgroundColor: form.category === cat.name ? cat.color : `${cat.color}15`,
+                      borderWidth: form.category === cat.name ? 2 : 1,
+                      borderColor: form.category === cat.name ? cat.color : `${cat.color}40`,
+                      borderRadius: 12,
+                      paddingHorizontal: 14,
+                      paddingVertical: 8,
+                      minWidth: 110,
+                    }}
+                  >
+                    <Text style={{ fontFamily: 'DMSans_500Medium', fontSize: 12, color: form.category === cat.name ? '#FFFFFF' : cat.color, textAlign: 'center' }}>
+                      {cat.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            <Field label="Content" value={form.content} onChangeText={(value) => setForm((prev) => ({ ...prev, content: value }))} placeholder="Write the full educational article here..." multiline inputStyle={{ minHeight: 240, textAlignVertical: 'top' }} />
+
+            <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
+              <ActionButton label="Save Draft" icon="save" onPress={() => saveBlog('draft')} loading={saving} secondary />
+              <ActionButton label="Publish" icon="send" onPress={() => saveBlog('published')} loading={saving} />
+              {selectedBlog ? <ActionButton label="Delete" icon="trash-2" onPress={deleteBlog} loading={saving} danger /> : null}
+            </View>
           </ScrollView>
-        </View>
-
-        <Field label="Content" value={form.content} onChangeText={(value) => setForm((prev) => ({ ...prev, content: value }))} placeholder="Write the full educational article here..." multiline inputStyle={{ minHeight: 240, textAlignVertical: 'top' }} />
-
-        <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
-          <ActionButton label="Save Draft" icon="save" onPress={() => saveBlog('draft')} loading={saving} secondary />
-          <ActionButton label="Publish" icon="send" onPress={() => saveBlog('published')} loading={saving} />
-          {selectedBlog ? <ActionButton label="Delete" icon="trash-2" onPress={deleteBlog} loading={saving} danger /> : null}
-        </View>
-      </ScrollView>
+        </>
+      )}
     </View>
   );
 
@@ -342,49 +412,58 @@ export default function BlogsScreen({ doctor }) {
           <ActivityIndicator color="#00C2B2" size="large" />
         </View>
       ) : isWide ? (
-        <View style={{ flexDirection: 'row', gap: 18, alignItems: 'flex-start' }}>
-          <View style={{ flex: 1, gap: 18 }}>
-            <View style={{ backgroundColor: '#fff', borderRadius: 24, borderWidth: 1, borderColor: '#E6EDF7', padding: 20 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                <View>
-                  <Text style={{ fontFamily: 'Sora_700Bold', fontSize: 22, color: '#1A2235' }}>Blogs</Text>
-                  <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 13, color: '#6B7A99', marginTop: 4 }}>Published blogs are the same ones patients see in Skin Education.</Text>
-                </View>
-                <TouchableOpacity onPress={resetDraft} style={{ backgroundColor: '#00C2B2', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Feather name="plus" size={16} color="#050E1F" />
-                  <Text style={{ fontFamily: 'DMSans_500Medium', color: '#050E1F' }}>New Draft</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
-                {[
-                  { label: 'Authored', value: counts.authored, color: '#00C2B2' },
-                  { label: 'Drafts', value: counts.drafts, color: '#FFAA00' },
-                ].map((item) => (
-                  <View key={item.label} style={{ flex: 1, minWidth: 90, backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: '#E6EDF7', padding: 14 }}>
-                    <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 12, color: '#6B7A99' }}>{item.label}</Text>
-                    <Text style={{ fontFamily: 'Sora_700Bold', fontSize: 22, color: item.color, marginTop: 4 }}>{item.value}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-
-            <BlogCardList
-              title="My blogs"
-              subtitle="Drafts and authored posts you can edit and publish."
-              items={myBlogs}
-              editable
-            />
-
-            <BlogCardList
-              title="Educational resources"
-              subtitle="Learning materials for patient reference."
-              items={educationalArticles}
-              editable={false}
-            />
-          </View>
-
+        <View style={{ position: 'relative', minHeight: Math.max(640, height - 220) }}>
           {editorPanel}
+
+          {showBlogDrawer ? (
+            <>
+              <TouchableOpacity
+                activeOpacity={1}
+                onPress={closeBlogDrawer}
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(5,14,31,0.18)', borderRadius: 24 }}
+              />
+
+              <View style={{ position: 'absolute', top: 0, right: 0, width: drawerWidth, height: '100%', backgroundColor: '#FFFFFF', borderRadius: 24, borderWidth: 1, borderColor: '#E6EDF7', padding: 20, gap: 18, shadowColor: '#0B1220', shadowOpacity: 0.12, shadowRadius: 18, shadowOffset: { width: -6, height: 0 }, elevation: 10 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View>
+                    <Text style={{ fontFamily: 'Sora_700Bold', fontSize: 22, color: '#1A2235' }}>Blogs</Text>
+                    <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 13, color: '#6B7A99', marginTop: 4 }}>Published blogs are the same ones patients see in Skin Education.</Text>
+                  </View>
+                  <TouchableOpacity onPress={closeBlogDrawer} activeOpacity={0.75} style={{ backgroundColor: '#EEF7FB', borderRadius: 999, padding: 10 }}>
+                    <Feather name="x" size={16} color="#0F395B" />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
+                  {[
+                    { label: 'Authored', value: counts.authored, color: '#00C2B2' },
+                    { label: 'Drafts', value: counts.drafts, color: '#FFAA00' },
+                  ].map((item) => (
+                    <View key={item.label} style={{ flex: 1, minWidth: 90, backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: '#E6EDF7', padding: 14 }}>
+                      <Text style={{ fontFamily: 'DMSans_400Regular', fontSize: 12, color: '#6B7A99' }}>{item.label}</Text>
+                      <Text style={{ fontFamily: 'Sora_700Bold', fontSize: 22, color: item.color, marginTop: 4 }}>{item.value}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                <BlogCardList
+                  title="Doctor Blogs"
+                  subtitle="The same expert blogs shown in the mobile app."
+                  items={expertBlogs}
+                  selectable
+                  selectedSource="expert"
+                />
+
+                <BlogCardList
+                  title="Educational Blogs"
+                  subtitle="The same blogs available in the mobile app."
+                  items={publishedBlogs}
+                  selectable
+                  selectedSource="education"
+                />
+              </View>
+            </>
+          ) : null}
         </View>
       ) : (
         <View style={{ gap: 18 }}>
@@ -413,8 +492,8 @@ export default function BlogsScreen({ doctor }) {
             </View>
           </View>
 
-          <BlogCardList title="My blogs" subtitle="Drafts and authored posts you can edit and publish." items={myBlogs} editable />
-          <BlogCardList title="Educational resources" subtitle="Learning materials for patient reference." items={educationalArticles} editable={false} />
+          <BlogCardList title="Doctor Blogs" subtitle="The same expert blogs shown in the mobile app." items={expertBlogs} selectable selectedSource="expert" />
+          <BlogCardList title="Educational Blogs" subtitle="The same blogs available in the mobile app." items={publishedBlogs} selectable selectedSource="education" />
           {editorPanel}
         </View>
       )}

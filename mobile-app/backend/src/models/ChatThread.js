@@ -11,6 +11,7 @@ const ChatThreadSchema = new mongoose.Schema(
     },
     lastMessage: { type: String, trim: true, default: '' },
     lastMessageAt: { type: Date, default: Date.now, index: true },
+    isPinned: { type: Boolean, default: false, index: true },
     unreadForPatient: { type: Number, default: 0 },
     unreadForDoctor: { type: Number, default: 0 },
   },

@@ -200,6 +200,7 @@ exports.analyzeWithGradCAM = asyncHandler(async (req, res) => {
     heatmapShape: result.heatmapShape,
     quality: result.quality,
     metrics: result.metrics,
+    bbox: result.bbox || null,
     modelUsed: !!modelPrediction,
     modelType: modelPrediction?.modelType || null,
     modelMargin: modelPrediction?.margin || null,

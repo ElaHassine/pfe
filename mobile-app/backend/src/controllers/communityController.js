@@ -9,36 +9,10 @@ const CommentLike = require('../models/CommentLike');
 const Patient = require('../models/Patient');
 const asyncHandler = require('../middleware/asyncHandler');
 const { recordPatientActivity } = require('../services/activityService');
-
-function publicBaseUrl(req) {
-  return `${req.protocol}://${req.get('host')}`;
-}
+const { getUploadsSubdir, normalizeMediaUrl } = require('../utils/media');
 
 function normalizeImageUrl(rawUrl, req) {
-  const value = String(rawUrl || '').trim();
-  if (!value) return '';
-
-  if (/^https?:\/\//i.test(value)) {
-    try {
-      const parsed = new URL(value);
-      if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-        return `${publicBaseUrl(req)}${parsed.pathname}${parsed.search}`;
-      }
-    } catch (_error) {
-      return value;
-    }
-    return value;
-  }
-
-  if (value.startsWith('/uploads/')) {
-    return `${publicBaseUrl(req)}${value}`;
-  }
-
-  if (value.startsWith('uploads/')) {
-    return `${publicBaseUrl(req)}/${value}`;
-  }
-
-  return value;
+  return normalizeMediaUrl(rawUrl, req);
 }
 
 async function storeCommunityImage(file) {
@@ -47,8 +21,7 @@ async function storeCommunityImage(file) {
   const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
   const safeExt = ['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext) ? ext : '.jpg';
   const fileName = `community-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${safeExt}`;
-  const relativeDir = path.join('uploads', 'community');
-  const absoluteDir = path.join(__dirname, '..', '..', relativeDir);
+  const absoluteDir = getUploadsSubdir('community');
   await fs.mkdir(absoluteDir, { recursive: true });
 
   const absoluteFilePath = path.join(absoluteDir, fileName);

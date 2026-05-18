@@ -141,6 +141,35 @@ async function computeGradCAM(imageBuffer) {
       }
     }
 
+    // Compute bounding box from heatmap by thresholding high-activation pixels
+    const THRESHOLD = 60; // activation threshold (0-255)
+    let minX = width, minY = height, maxX = 0, maxY = 0;
+    for (let i = 0; i < heatmapData.length; i++) {
+      const val = heatmapData[i];
+      if (val > THRESHOLD) {
+        const px = i % width;
+        const py = Math.floor(i / width);
+        if (px < minX) minX = px;
+        if (py < minY) minY = py;
+        if (px > maxX) maxX = px;
+        if (py > maxY) maxY = py;
+      }
+    }
+    let bbox = null;
+    if (minX <= maxX && minY <= maxY) {
+      const pad = 6; // pixels
+      const x1 = Math.max(0, minX - pad);
+      const y1 = Math.max(0, minY - pad);
+      const x2 = Math.min(width - 1, maxX + pad);
+      const y2 = Math.min(height - 1, maxY + pad);
+      bbox = {
+        x: Number((x1 / width).toFixed(4)),
+        y: Number((y1 / height).toFixed(4)),
+        w: Number(((x2 - x1) / width).toFixed(4)),
+        h: Number(((y2 - y1) / height).toFixed(4)),
+      };
+    }
+
     const pixelCount = width * height;
     const brightnessMean = brightnessSum / pixelCount;
     const variance = Math.max(0, brightnessSqSum / pixelCount - brightnessMean * brightnessMean);
@@ -218,6 +247,7 @@ async function computeGradCAM(imageBuffer) {
       confidence: confidence / 100,
       riskLevel,
       lesionType,
+      bbox,
       quality: {
         valid: qualityOk,
         brightness: Number(brightnessMean.toFixed(3)),

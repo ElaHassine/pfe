@@ -10,6 +10,11 @@ const ChatThread = require('../models/ChatThread');
 const DoctorAppointment = require('../models/DoctorAppointment');
 const ActivityEvent = require('../models/ActivityEvent');
 const { recordPatientActivity } = require('../services/activityService');
+const { normalizeMediaUrl } = require('../utils/media');
+
+function normalizeImageUrl(rawUrl, req) {
+  return normalizeMediaUrl(rawUrl, req);
+}
 
 function calculateAge(dob) {
   if (!dob) {
@@ -53,7 +58,7 @@ function statusWeight(status) {
   }
 }
 
-function toCaseItem(scan) {
+function toCaseItem(scan, req) {
   const patient = scan.patientId || {};
   return {
     id: scan._id,
@@ -68,7 +73,7 @@ function toCaseItem(scan) {
     notes: scan.notes || '',
     status: scan.status,
     priority: scan.riskLevel === 'high' && scan.status === 'pending',
-    imageUrl: scan.imageUrl,
+    imageUrl: normalizeImageUrl(scan.imageUrl, req),
     imageKey: scan.imageKey || '',
     analysis: scan.analysis || {},
     reviewedAt: scan.reviewedAt || null,
@@ -97,7 +102,7 @@ function sortCases(a, b) {
   return new Date(b.scanDate).getTime() - new Date(a.scanDate).getTime();
 }
 
-function toCommunityPost(post) {
+function toCommunityPost(post, req) {
   const patient = post.patientId || {};
   const profile = patient.profile || {};
 
@@ -108,7 +113,7 @@ function toCommunityPost(post) {
       name: formatPatientName(patient),
       avatarUrl: profile.avatarUrl || '',
     },
-    imageUrl: post.imageUrl,
+    imageUrl: normalizeImageUrl(post.imageUrl, req),
     imageKey: post.imageKey || '',
     diagnosis: post.diagnosis,
     note: post.note,
@@ -241,7 +246,7 @@ async function getContactedPatientIds(doctorUser) {
   return ids;
 }
 
-async function loadPatientsAndScans(doctorUser) {
+async function loadPatientsAndScans(doctorUser, req) {
   const contactedPatientIds = await getContactedPatientIds(doctorUser);
   const contactedIdsArray = Array.from(contactedPatientIds);
 
@@ -282,18 +287,18 @@ async function loadPatientsAndScans(doctorUser) {
     };
   });
 
-  const caseItems = scans.map(toCaseItem).sort(sortCases);
+  const caseItems = scans.map((scan) => toCaseItem(scan, req)).sort(sortCases);
 
   return { patients, patientSummaries, scans, caseItems };
 }
 
-async function loadCommunityPosts() {
+async function loadCommunityPosts(req) {
   const posts = await CommunityPost.find()
     .sort({ createdAt: -1 })
     .populate({ path: 'patientId', select: 'email profile dob' })
     .lean();
 
-  return posts.map(toCommunityPost);
+  return posts.map((post) => toCommunityPost(post, req));
 }
 
 async function loadNotifications() {
@@ -313,8 +318,8 @@ exports.getDashboard = asyncHandler(async (req, res) => {
     : { doctorId: doctorObjectId };
 
   const [data, communityPosts, notificationRequests] = await Promise.all([
-    loadPatientsAndScans(req.user),
-    loadCommunityPosts(),
+    loadPatientsAndScans(req.user, req),
+    loadCommunityPosts(req),
     BookingRequest.find(notificationFilter).sort({ createdAt: -1 }).lean(),
   ]);
   const notifications = notificationRequests.map(toNotification);
@@ -359,7 +364,7 @@ exports.getDashboard = asyncHandler(async (req, res) => {
 });
 
 exports.listCases = asyncHandler(async (req, res) => {
-  const { caseItems } = await loadPatientsAndScans(req.user);
+  const { caseItems } = await loadPatientsAndScans(req.user, req);
   res.json({ cases: caseItems });
 });
 
@@ -379,11 +384,11 @@ exports.getCaseById = asyncHandler(async (req, res) => {
     return res.status(403).json({ message: 'Forbidden' });
   }
 
-  res.json({ caseData: toCaseItem(scan) });
+  res.json({ caseData: toCaseItem(scan, req) });
 });
 
 exports.listPatients = asyncHandler(async (req, res) => {
-  const { patientSummaries } = await loadPatientsAndScans(req.user);
+  const { patientSummaries } = await loadPatientsAndScans(req.user, req);
   res.json({ patients: patientSummaries });
 });
 
@@ -430,7 +435,7 @@ exports.getPatientHistory = asyncHandler(async (req, res) => {
       name: formatPatientName(patient),
       age: calculateAge(patient.dob),
       email: patient.email,
-      avatarUrl: patient.profile?.avatarUrl || '',
+      avatarUrl: normalizeImageUrl(patient.profile?.avatarUrl || '', req),
       phone: patient.profile?.phone || '',
       gender: patient.profile?.gender || '',
       location: patient.profile?.location || '',
@@ -454,7 +459,7 @@ exports.getPatientHistory = asyncHandler(async (req, res) => {
       confidence: scan.confidence,
       lesionType: scan.lesionType,
       status: scan.status,
-      imageUrl: scan.imageUrl,
+      imageUrl: normalizeImageUrl(scan.imageUrl, req),
       notes: scan.notes || '',
       reviewedAt: scan.reviewedAt || null,
       doctorNotes: scan.doctorNotes || '',
@@ -475,12 +480,12 @@ exports.getPatientHistory = asyncHandler(async (req, res) => {
 });
 
 exports.listCommunityPosts = asyncHandler(async (_req, res) => {
-  const posts = await loadCommunityPosts();
+  const posts = await loadCommunityPosts(_req);
   res.json({ posts });
 });
 
 exports.getCommunitySummary = asyncHandler(async (_req, res) => {
-  const posts = await loadCommunityPosts();
+  const posts = await loadCommunityPosts(_req);
   const totalComments = posts.reduce((sum, post) => sum + (post.commentCount || 0), 0);
   const totalLikes = posts.reduce((sum, post) => sum + (post.likeCount || 0), 0);
 

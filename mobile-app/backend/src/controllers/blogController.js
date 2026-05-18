@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const http = require('http');
+const https = require('https');
 const asyncHandler = require('../middleware/asyncHandler');
 const BlogPost = require('../models/BlogPost');
 
@@ -70,11 +72,97 @@ async function getBlogOr404(blogId) {
 }
 
 exports.listPublishedBlogs = asyncHandler(async (_req, res) => {
-  const blogs = await BlogPost.find({ status: 'published' })
+  const localBlogs = await BlogPost.find({ status: 'published' })
     .sort({ publishedAt: -1, createdAt: -1 })
     .lean();
 
-  res.json({ blogs: blogs.map(toBlogItem) });
+  // Try to fetch published blogs from a doctor-portal API and merge results.
+  const doctorPortalBase = process.env.DOCTOR_PORTAL_API_URL || 'http://localhost:4001';
+
+  function fetchJson(url) {
+    return new Promise((resolve, reject) => {
+      const lib = url.startsWith('https') ? https : http;
+      const req = lib.get(url, (resp) => {
+        let data = '';
+        resp.on('data', (chunk) => { data += chunk; });
+        resp.on('end', () => {
+          try {
+            const parsed = JSON.parse(data || '{}');
+            resolve(parsed);
+          } catch (err) {
+            reject(err);
+          }
+        });
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  let remoteBlogs = [];
+  try {
+    const payload = await fetchJson(`${doctorPortalBase}/api/doctor/blogs`);
+    if (payload && Array.isArray(payload.blogs)) {
+      remoteBlogs = payload.blogs
+        .filter((b) => (b.status || 'published') === 'published')
+        .map((b) => ({
+          id: b.id || String(b._id || ''),
+          authorDoctorId: b.authorDoctorId || b.authorId || '',
+          authorSnapshot: b.authorSnapshot || { name: 'Doctor', avatarUrl: '', specialty: '' },
+          title: b.title || '',
+          summary: b.summary || '',
+          content: b.content || '',
+          coverImageUrl: b.coverImageUrl || '',
+          tags: b.tags || [],
+          keyPoints: b.keyPoints || [],
+          category: b.category || 'Doctor Blog',
+          color: b.color || '',
+          readTime: b.readTime || estimateReadTime(b.content || b.summary || ''),
+          status: b.status || 'published',
+          publishedAt: b.publishedAt || null,
+          createdAt: b.createdAt || null,
+          updatedAt: b.updatedAt || null,
+        }));
+    }
+  } catch (err) {
+    // If remote fetch fails, continue with local blogs only.
+    console.warn('Failed to fetch remote doctor blogs:', err && err.message);
+  }
+
+  // Merge local and remote (avoid duplicates by id)
+  const byId = new Map();
+  (localBlogs.map(toBlogItem)).forEach((b) => byId.set(String(b.id), b));
+  (remoteBlogs || []).forEach((b) => {
+    const key = String(b.id || '');
+    if (!key) return;
+    if (!byId.has(key)) {
+      // remote already has normalized shape, but ensure consistent keys
+      byId.set(key, {
+        id: String(b.id),
+        authorDoctorId: String(b.authorDoctorId || ''),
+        authorSnapshot: b.authorSnapshot || { name: 'Doctor', avatarUrl: '', specialty: '' },
+        title: b.title || '',
+        summary: b.summary || '',
+        content: b.content || '',
+        coverImageUrl: b.coverImageUrl || '',
+        tags: b.tags || [],
+        keyPoints: b.keyPoints || [],
+        category: b.category || 'Doctor Blog',
+        color: b.color || '',
+        readTime: b.readTime || estimateReadTime(b.content || b.summary || ''),
+        status: b.status || 'published',
+        publishedAt: b.publishedAt || null,
+        createdAt: b.createdAt || null,
+        updatedAt: b.updatedAt || null,
+      });
+    }
+  });
+
+  res.json({ blogs: Array.from(byId.values()).sort((a, b) => {
+    const ta = new Date(a.publishedAt || a.createdAt || 0).getTime();
+    const tb = new Date(b.publishedAt || b.createdAt || 0).getTime();
+    return tb - ta;
+  }) });
 });
 
 exports.listDoctorBlogs = asyncHandler(async (req, res) => {
